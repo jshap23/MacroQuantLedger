@@ -19,7 +19,7 @@ def staleness_color(days: int | None) -> str:
     if days <= 14:
         return "#4ade80"   # green
     if days <= 28:
-        return "#60a5fa"   # blue-amber (mid warning)
+        return "#fbbf24"   # amber
     if days <= 42:
         return "#fb923c"   # orange
     return "#f87171"       # red
@@ -36,12 +36,12 @@ def staleness_label(days: int | None) -> str:
 
 
 def render_status_bar(state: AppState):
-    # STALE VIEWS
-    stale_count = sum(
+    # VIEWS CURRENT (touched within 14 days)
+    current_count = sum(
         1 for v in state.macro_views
-        if v.last_touched is None or (days_since(v.last_touched) or 999) > 14
+        if v.last_touched is not None and days_since(v.last_touched) <= 14
     )
-    stale_color = "#4ade80" if stale_count == 0 else ("#60a5fa" if stale_count <= 2 else "#f87171")
+    stale_color = "#4ade80" if current_count == 7 else ("#fbbf24" if current_count >= 5 else "#f87171")
 
     # QUANT TRACKER — most recently touched item
     all_quant = (
@@ -63,13 +63,13 @@ def render_status_bar(state: AppState):
         recon_days = days_since(state.reconciliations[0].date)
     recon_color = (
         "#4ade80" if recon_days is not None and recon_days <= 7
-        else "#60a5fa" if recon_days is not None and recon_days <= 10
+        else "#fbbf24" if recon_days is not None and recon_days <= 10
         else "#f87171"
     )
     recon_label = staleness_label(recon_days)
 
     with ui.row().classes("status-bar"):
-        _indicator("STALE VIEWS", f"{stale_count}/7", stale_color)
+        _indicator("VIEWS CURRENT", f"{current_count}/7", stale_color)
         _indicator("QUANT TRACKER", quant_label, quant_color)
         _indicator("LAST RECONCILIATION", recon_label, recon_color)
 

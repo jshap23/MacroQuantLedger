@@ -17,6 +17,17 @@ class MacroView(BaseModel):
     last_touched: Optional[datetime] = None
 
 
+class AssetView(BaseModel):
+    id: str
+    name: str
+    group: str                   # "l1" | "equities" | "fixed_income"
+    direction: str = "No View"   # Bullish | Neutral | Bearish | No View
+    conviction: str = "—"        # High | Medium | Low | —
+    note: str = ""
+    commentary: str = ""
+    last_touched: Optional[datetime] = None
+
+
 class Project(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str = ""
@@ -64,18 +75,38 @@ class Reconciliation(BaseModel):
 class AppState(BaseModel):
     macro_views: list[MacroView] = Field(default_factory=list)
     macro_notes: str = ""
+    asset_views: list[AssetView] = Field(default_factory=list)
     quant_tracker: QuantTracker = Field(default_factory=QuantTracker)
     reconciliations: list[Reconciliation] = Field(default_factory=list)
 
 
 DEFAULT_MACRO_VIEWS = [
-    MacroView(id="growth", name="Growth Trajectory"),
+    MacroView(id="growth", name="US Growth"),
     MacroView(id="global_growth", name="Global Growth"),
-    MacroView(id="inflation", name="Inflation Dynamics"),
+    MacroView(id="inflation", name="Inflation"),
     MacroView(id="fed", name="Fed Policy Path"),
     MacroView(id="term_premium", name="Term Premium"),
-    MacroView(id="usd", name="USD"),
     MacroView(id="credit", name="Credit"),
+    MacroView(id="usd", name="USD"),
+]
+
+DEFAULT_ASSET_VIEWS = [
+    # Level 1
+    AssetView(id="stocks_bonds", name="Stocks vs Bonds", group="l1"),
+    # Equities
+    AssetView(id="eq_us_lc",  name="US LC",          group="equities"),
+    AssetView(id="eq_us_smid",name="US SMID",         group="equities"),
+    AssetView(id="eq_europe", name="Europe",          group="equities"),
+    AssetView(id="eq_japan",  name="Japan",           group="equities"),
+    AssetView(id="eq_em_xch", name="EM x China",      group="equities"),
+    AssetView(id="eq_china",  name="China",           group="equities"),
+    AssetView(id="eq_pe",     name="Private Equity",  group="equities"),
+    # Fixed Income
+    AssetView(id="fi_tsy",    name="US Treasuries",   group="fixed_income"),
+    AssetView(id="fi_sec",    name="Securitized Credit", group="fixed_income"),
+    AssetView(id="fi_lev",    name="Leveraged Credit", group="fixed_income"),
+    AssetView(id="fi_global", name="Global Bonds",    group="fixed_income"),
+    AssetView(id="fi_em",     name="EM Debt",         group="fixed_income"),
 ]
 
 
@@ -83,6 +114,7 @@ def default_state() -> AppState:
     return AppState(
         macro_views=[v.model_copy() for v in DEFAULT_MACRO_VIEWS],
         macro_notes="",
+        asset_views=[v.model_copy() for v in DEFAULT_ASSET_VIEWS],
         quant_tracker=QuantTracker(
             projects=[Project()],
             skills=[Skill()],

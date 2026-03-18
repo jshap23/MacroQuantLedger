@@ -1,11 +1,12 @@
 from __future__ import annotations
 import asyncio
 from nicegui import ui, app as ni_app
-from storage.persistence import load_state, save_state
+from storage.persistence import load_state, save_state, import_state, STATE_FILE
 from components.status_bar import render_status_bar
 from components.macro_views import render_macro_views
 from components.quant_tracker import render_quant_tracker
 from components.reconciliation import render_reconciliation
+from components.asset_views import render_asset_views
 from export.excel import generate_excel
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
@@ -22,11 +23,11 @@ CUSTOM_CSS = """
     --border:        #23232e;
     --border-strong: #2e2e3e;
     --text-primary:  #dddde8;
-    --text-muted:    #5a5a72;
-    --text-faint:    #38384a;
-    --accent:        #4a8fe8;
-    --accent-dim:    #1a2d4a;
-    --accent-glow:   #4a8fe822;
+    --text-muted:    #9090b0;
+    --text-faint:    #60607a;
+    --accent:        #2dd4bf;
+    --accent-dim:    #0d2e2b;
+    --accent-glow:   #2dd4bf18;
     --tab-bg:        #13131a;
 }
 
@@ -42,9 +43,9 @@ body.light-mode {
     --text-primary:  #18181e;
     --text-muted:    #6b6b82;
     --text-faint:    #b0b0c0;
-    --accent:        #2563eb;
-    --accent-dim:    #dbeafe;
-    --accent-glow:   #2563eb18;
+    --accent:        #0f766e;
+    --accent-dim:    #ccfbf1;
+    --accent-glow:   #0f766e18;
     --tab-bg:        #eaeaf0;
 }
 
@@ -234,6 +235,23 @@ body.light-mode .saved-toast {
 .quant-card:hover { border-color: var(--border-strong); }
 .quant-section-container { width: 100%; }
 
+/* ── Asset view rows ── */
+.asset-row-l1 {
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 0.75rem;
+}
+.asset-row-l2 {
+    padding: 0.35rem 0.6rem;
+    border-radius: 4px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+}
+.asset-row-l2:hover { background: var(--bg-hover); }
+.asset-row-l2:last-child { border-bottom: none; }
+
 /* ── Reconciliation ── */
 .recon-form-card {
     background: var(--bg-card);
@@ -311,6 +329,21 @@ body.light-mode .saved-toast {
     white-space: nowrap !important;
 }
 .export-btn:hover { opacity: 0.88 !important; }
+.import-btn {
+    background: transparent !important;
+    color: var(--accent) !important;
+    border: 1px solid var(--accent) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 0.78rem !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
+    white-space: nowrap !important;
+    padding: 0 1rem !important;
+}
+.import-btn:hover {
+    background: var(--accent-glow) !important;
+    opacity: 1 !important;
+}
 .reset-btn {
     background: transparent !important;
     color: var(--text-muted) !important;
@@ -396,8 +429,17 @@ def index():
     with saved_el:
         ui.label("✓ saved")
 
+    status_container = {"el": None}
+
+    def refresh_status():
+        if status_container["el"] is not None:
+            status_container["el"].clear()
+            with status_container["el"]:
+                render_status_bar(s)
+
     def save_indicator():
         show_saved(saved_el)
+        refresh_status()
 
     # ── Header ────────────────────────────────────────────────────────────────
     with ui.element("div").classes("app-header"):
@@ -430,6 +472,61 @@ def index():
                 ui.download(str(path))
 
             ui.button("Export Excel", on_click=do_export).classes("export-btn")
+
+            def do_export_json():
+                ui.download(str(STATE_FILE), "macroquant_state.json")
+
+            ui.button("Export JSON", on_click=do_export_json).classes("import-btn")
+
+            def do_import():
+                with ui.dialog() as dialog, ui.card().style(
+                    "background:var(--bg-card); color:var(--text-primary); "
+                    "font-family:'IBM Plex Mono',monospace; min-width:380px; padding:1.5rem;"
+                ):
+                    ui.label("Import State").style(
+                        "font-size:1rem; font-weight:700; color:var(--accent); margin-bottom:0.5rem;"
+                    )
+                    ui.label(
+                        "Upload a previously exported macroquant_state.json file. "
+                        "Your current data will be replaced immediately."
+                    ).style(
+                        "color:var(--text-muted); font-size:0.8rem; margin-bottom:1.25rem; line-height:1.6;"
+                    )
+
+                    status_label = ui.label("").style(
+                        "font-size:0.78rem; color:#f87171; min-height:1.2em;"
+                    )
+
+                    def handle_upload(e):
+                        global state
+                        try:
+                            content = e.content.read().decode("utf-8")
+                            state = import_state(content)
+                            dialog.close()
+                            ui.navigate.reload()
+                        except ValueError as exc:
+                            status_label.set_text(str(exc))
+                        except Exception as exc:
+                            status_label.set_text(f"Unexpected error: {exc}")
+
+                    ui.upload(
+                        label="Choose state.json",
+                        auto_upload=True,
+                        on_upload=handle_upload,
+                    ).props("accept=.json").style(
+                        "font-family:'IBM Plex Mono',monospace; font-size:0.8rem;"
+                    )
+
+                    with ui.row().style("gap:0.5rem; justify-content:flex-end; margin-top:1rem;"):
+                        ui.button("Cancel", on_click=dialog.close).style(
+                            "background:transparent; color:var(--text-muted); "
+                            "border:1px solid var(--border); box-shadow:none; "
+                            "font-family:'IBM Plex Mono',monospace;"
+                        )
+
+                dialog.open()
+
+            ui.button("Import JSON", on_click=do_import).classes("import-btn")
 
             def do_reset():
                 with ui.dialog() as dialog, ui.card().style(
@@ -466,18 +563,23 @@ def index():
             ui.button("Reset Data", on_click=do_reset).classes("reset-btn")
 
     # ── Status Bar ────────────────────────────────────────────────────────────
-    with ui.element("div"):
+    status_container["el"] = ui.element("div").style("width:100%;")
+    with status_container["el"]:
         render_status_bar(s)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
     with ui.tabs().classes("w-full") as tabs:
-        tab_macro = ui.tab("Macro Views")
-        tab_quant = ui.tab("Quant Development")
-        tab_recon = ui.tab("Weekly Reconciliation")
+        tab_macro  = ui.tab("Macro Views")
+        tab_asset  = ui.tab("Asset Class Views")
+        tab_quant  = ui.tab("Quant Development")
+        tab_recon  = ui.tab("Weekly Reconciliation")
 
     with ui.tab_panels(tabs, value=tab_macro).classes("w-full"):
         with ui.tab_panel(tab_macro):
             render_macro_views(s, save_indicator)
+
+        with ui.tab_panel(tab_asset):
+            render_asset_views(s, save_indicator)
 
         with ui.tab_panel(tab_quant):
             render_quant_tracker(s, save_indicator)

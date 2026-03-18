@@ -14,24 +14,13 @@ DIRECTION_COLORS = {
     "No View":  {"bg": "#1e1e24", "text": "#555566", "dot": "#555566"},
 }
 
-# Conviction: small subtle indicator dots
-CONVICTION_DOTS = {
-    "High":   ("●●●", "#4a8fe8"),
-    "Medium": ("●●○", "#4a8fe8"),
-    "Low":    ("●○○", "#4a8fe8"),
-    "—":      ("○○○", "#333344"),
-}
-
-FLAG_MAP = {
-    "Coherent":     "green",
-    "Tension":      "yellow",
-    "Inconsistent": "red",
-}
-FLAG_DISPLAY = {v: k for k, v in FLAG_MAP.items()}
-FLAG_COLORS = {
-    "green":  "#4ade80",
-    "yellow": "#facc15",
-    "red":    "#f87171",
+# Conviction: signal-bar style icons (3 vertical bars, filled = active)
+# rendered as stacked spans via HTML in the header
+CONVICTION_BARS = {
+    "High":   3,
+    "Medium": 2,
+    "Low":    1,
+    "—":      0,
 }
 
 
@@ -82,19 +71,33 @@ def _render_card(view: MacroView, state: AppState, save):
             _render_body(view, state, save)
 
 
+def _conviction_bars_html(conviction: str) -> str:
+    filled = CONVICTION_BARS.get(conviction, 0)
+    on_color = "#2dd4bf"
+    off_color = "#2a2a3e"
+    heights = ["7px", "11px", "15px"]
+    bars = ""
+    for i, h in enumerate(heights):
+        color = on_color if i < filled else off_color
+        bars += (
+            f'<span style="display:inline-block; width:4px; height:{h}; '
+            f'background:{color}; border-radius:1px; margin-right:2px; '
+            f'vertical-align:bottom;"></span>'
+        )
+    return f'<span style="display:inline-flex; align-items:flex-end; gap:0; flex-shrink:0;">{bars}</span>'
+
+
 def _build_header_contents(view: MacroView, is_expanded: bool):
     dc = DIRECTION_COLORS.get(view.direction, DIRECTION_COLORS["No View"])
-    dots, dot_color = CONVICTION_DOTS.get(view.conviction, CONVICTION_DOTS["—"])
     d = days_since(view.last_touched)
     s_label = "never" if d is None else ("today" if d == 0 else f"{d}d ago")
     s_color = staleness_color(d)
-    flag_color = FLAG_COLORS.get(view.flag, "#555")
 
     # Direction badge (prominent)
     ui.element("span").style(
         f"background:{dc['bg']}; color:{dc['text']}; padding:3px 10px; border-radius:4px; "
         f"font-size:0.75rem; font-weight:700; letter-spacing:0.05em; "
-        f"border:1px solid {dc['text']}22; white-space:nowrap; flex-shrink:0;"
+        f"border:1px solid {dc['text']}33; white-space:nowrap; flex-shrink:0;"
     ).text = view.direction
 
     # Variable name
@@ -111,17 +114,8 @@ def _build_header_contents(view: MacroView, is_expanded: bool):
     else:
         ui.element("span").style("flex:1;")
 
-    # Conviction dots (subtle)
-    ui.element("span").style(
-        f"color:{dot_color}; font-size:0.7rem; letter-spacing:2px; "
-        f"flex-shrink:0; opacity:0.85; margin-right:4px; font-family:monospace;"
-    ).text = dots
-
-    # Flag dot
-    ui.element("span").style(
-        f"width:8px; height:8px; border-radius:50%; background:{flag_color}; "
-        f"display:inline-block; flex-shrink:0; opacity:0.7;"
-    )
+    # Conviction signal bars (subtle, smaller than direction badge)
+    ui.html(_conviction_bars_html(view.conviction)).style("flex-shrink:0; margin-right:2px;")
 
     # Staleness
     ui.label(s_label).style(
@@ -189,7 +183,7 @@ def _render_body(view: MacroView, state: AppState, save):
         setattr(v, "counter", ci.value), update_and_save()
     ))
 
-    # View direction + Conviction + Flag
+    # View direction + Conviction
     with ui.row().classes("w-full").style("gap:1rem; margin-top:0.75rem;"):
         with ui.column().style("flex:1; gap:0;"):
             ui.label("VIEW").classes("field-label")
@@ -208,15 +202,5 @@ def _render_body(view: MacroView, state: AppState, save):
                 value=view.conviction,
                 on_change=lambda e, v=view: (
                     setattr(v, "conviction", e.value), update_and_save()
-                )
-            ).classes("w-full dark-input")
-
-        with ui.column().style("flex:1; gap:0;"):
-            ui.label("CONSISTENCY FLAG").classes("field-label")
-            ui.select(
-                ["Coherent", "Tension", "Inconsistent"],
-                value=FLAG_DISPLAY.get(view.flag, "Coherent"),
-                on_change=lambda e, v=view: (
-                    setattr(v, "flag", FLAG_MAP.get(e.value, "green")), update_and_save()
                 )
             ).classes("w-full dark-input")
