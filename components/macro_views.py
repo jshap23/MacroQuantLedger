@@ -24,14 +24,14 @@ CONVICTION_BARS = {
 }
 
 
-def render_macro_views(state: AppState, save_indicator):
+def render_macro_views(state: AppState, save_indicator, log_change=None):
     def save():
         save_state(state)
         save_indicator()
 
     with ui.column().classes("w-full").style("gap:0; padding:0;"):
         for view in state.macro_views:
-            _render_card(view, state, save)
+            _render_card(view, state, save, log_change)
 
         ui.label("NOTES").classes("section-header").style("margin-top:2rem;")
         notes_area = ui.textarea(
@@ -46,7 +46,7 @@ def render_macro_views(state: AppState, save_indicator):
         notes_area.on("blur", lambda _: on_notes_blur())
 
 
-def _render_card(view: MacroView, state: AppState, save):
+def _render_card(view: MacroView, state: AppState, save, log_change=None):
     expanded = {"v": False}
 
     with ui.column().classes("w-full macro-card"):
@@ -68,7 +68,7 @@ def _render_card(view: MacroView, state: AppState, save):
             _build_header_contents(view, expanded["v"])
 
         with body:
-            _render_body(view, state, save)
+            _render_body(view, state, save, log_change)
 
 
 def _conviction_bars_html(conviction: str) -> str:
@@ -134,7 +134,7 @@ def _rebuild_header(header, view: MacroView, is_expanded: bool):
         _build_header_contents(view, is_expanded)
 
 
-def _render_body(view: MacroView, state: AppState, save):
+def _render_body(view: MacroView, state: AppState, save, log_change=None):
     def update_and_save():
         view.last_touched = datetime.now(tz=timezone.utc)
         save()
@@ -191,7 +191,9 @@ def _render_body(view: MacroView, state: AppState, save):
                 ["Bullish", "Neutral", "Bearish", "No View"],
                 value=view.direction,
                 on_change=lambda e, v=view: (
-                    setattr(v, "direction", e.value), update_and_save()
+                    log_change(v, "direction", v.direction, e.value) if log_change and v.direction != e.value else None,
+                    setattr(v, "direction", e.value),
+                    update_and_save(),
                 )
             ).classes("w-full dark-input")
 
@@ -201,6 +203,8 @@ def _render_body(view: MacroView, state: AppState, save):
                 ["High", "Medium", "Low", "—"],
                 value=view.conviction,
                 on_change=lambda e, v=view: (
-                    setattr(v, "conviction", e.value), update_and_save()
+                    log_change(v, "conviction", v.conviction, e.value) if log_change and v.conviction != e.value else None,
+                    setattr(v, "conviction", e.value),
+                    update_and_save(),
                 )
             ).classes("w-full dark-input")

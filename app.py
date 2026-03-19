@@ -7,6 +7,9 @@ from components.macro_views import render_macro_views
 from components.quant_tracker import render_quant_tracker
 from components.reconciliation import render_reconciliation
 from components.asset_views import render_asset_views
+from components.briefing_strip import render_briefing_strip
+from components.view_change_log import render_view_change_log
+from models.schema import ViewChangeEntry
 from export.excel import generate_excel
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
@@ -591,16 +594,33 @@ def index():
     with status_container["el"]:
         render_status_bar(s)
 
+    # ── View change logger ─────────────────────────────────────────────────────
+    def log_change(view, field: str, old_val: str, new_val: str):
+        if old_val == new_val:
+            return
+        from datetime import datetime, timezone
+        entry = ViewChangeEntry(
+            timestamp=datetime.now(tz=timezone.utc),
+            view_id=view.id,
+            view_name=view.name,
+            field=field,
+            old_value=old_val,
+            new_value=new_val,
+        )
+        s.view_change_log.insert(0, entry)
+
     # ── Tabs ──────────────────────────────────────────────────────────────────
     with ui.tabs().classes("w-full") as tabs:
         tab_macro  = ui.tab("Macro Views")
         tab_asset  = ui.tab("Asset Class Views")
         tab_quant  = ui.tab("Quant Development")
         tab_recon  = ui.tab("Weekly Reconciliation")
+        tab_log    = ui.tab("Change Log")
 
     with ui.tab_panels(tabs, value=tab_macro).classes("w-full"):
         with ui.tab_panel(tab_macro):
-            render_macro_views(s, save_indicator)
+            render_briefing_strip(s, save_indicator)
+            render_macro_views(s, save_indicator, log_change=log_change)
 
         with ui.tab_panel(tab_asset):
             render_asset_views(s, save_indicator)
@@ -610,6 +630,9 @@ def index():
 
         with ui.tab_panel(tab_recon):
             render_reconciliation(s, save_indicator)
+
+        with ui.tab_panel(tab_log):
+            render_view_change_log(s, save_indicator)
 
 
 ui.run(title="MacroQuant Ledger", port=8080, reload=False, host="0.0.0.0")

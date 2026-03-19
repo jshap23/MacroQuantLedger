@@ -72,12 +72,30 @@ class Reconciliation(BaseModel):
     synthesis: str = ""
 
 
+class BriefingStrip(BaseModel):
+    top_of_mind: str = ""
+    top_of_mind_touched: Optional[datetime] = None
+
+
+class ViewChangeEntry(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=None))
+    view_id: str
+    view_name: str
+    field: str          # "direction" | "conviction"
+    old_value: str
+    new_value: str
+    reason: str = ""
+
+
 class AppState(BaseModel):
     macro_views: list[MacroView] = Field(default_factory=list)
     macro_notes: str = ""
     asset_views: list[AssetView] = Field(default_factory=list)
     quant_tracker: QuantTracker = Field(default_factory=QuantTracker)
     reconciliations: list[Reconciliation] = Field(default_factory=list)
+    briefing: BriefingStrip = Field(default_factory=BriefingStrip)
+    view_change_log: list[ViewChangeEntry] = Field(default_factory=list)
 
 
 DEFAULT_MACRO_VIEWS = [
