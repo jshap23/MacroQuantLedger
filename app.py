@@ -387,6 +387,29 @@ body.light-mode .saved-toast {
 body.light-mode .q-card,
 body.light-mode .q-dialog .q-card { background: #fff !important; color: #18181e !important; }
 body.light-mode .q-select__dropdown-icon { color: var(--text-muted) !important; }
+
+/* ── Mobile responsive ── */
+@media (max-width: 640px) {
+    .app-header {
+        padding: 0.6rem 0.9rem;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+    }
+    .app-subtitle { display: none; }
+    .header-actions { gap: 0.3rem; flex-wrap: wrap; }
+    .status-bar {
+        padding: 0.5rem 0.9rem;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    .q-tab-panel { padding: 0.75rem 0.75rem !important; }
+    .q-tab {
+        font-size: 0.68rem !important;
+        letter-spacing: 0.04em !important;
+        padding: 0 0.5rem !important;
+    }
+    .macro-card-header { flex-wrap: wrap !important; }
+}
 """
 
 
@@ -419,6 +442,7 @@ def show_saved(label_el):
 def index():
     dark = ui.dark_mode()
     dark.enable()
+    ui.add_head_html('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
     ui.add_css(CUSTOM_CSS)
 
     s = get_state()
@@ -481,7 +505,7 @@ def index():
             def do_import():
                 with ui.dialog() as dialog, ui.card().style(
                     "background:var(--bg-card); color:var(--text-primary); "
-                    "font-family:'IBM Plex Mono',monospace; min-width:380px; padding:1.5rem;"
+                    "font-family:'IBM Plex Mono',monospace; min-width:min(380px,90vw); padding:1.5rem;"
                 ):
                     ui.label("Import State").style(
                         "font-size:1rem; font-weight:700; color:var(--accent); margin-bottom:0.5rem;"
@@ -531,7 +555,7 @@ def index():
             def do_reset():
                 with ui.dialog() as dialog, ui.card().style(
                     "background:var(--bg-card); color:var(--text-primary); "
-                    "font-family:'IBM Plex Mono',monospace; min-width:340px; padding:1.5rem;"
+                    "font-family:'IBM Plex Mono',monospace; min-width:min(340px,90vw); padding:1.5rem;"
                 ):
                     ui.label("Reset All Data").style(
                         "font-size:1rem; font-weight:700; color:var(--accent); margin-bottom:0.5rem;"
@@ -588,4 +612,4 @@ def index():
             render_reconciliation(s, save_indicator)
 
 
-ui.run(title="MacroQuant Ledger", port=8080, reload=False)
+ui.run(title="MacroQuant Ledger", port=8080, reload=False, host="0.0.0.0")

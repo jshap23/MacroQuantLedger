@@ -67,7 +67,7 @@ def _show_form(form_container, form_visible, start_btn, state: AppState, save, r
             ).classes("full-width dark-input")
 
             ui.label("TIME ALLOCATION (% of discretionary hours)").classes("field-label")
-            with ui.row().style("gap:1rem; align-items:center;"):
+            with ui.row().style("gap:1rem; align-items:center; flex-wrap:wrap;"):
                 macro_pct = ui.number(label="Macro", value=33, min=0, max=100).classes("dark-input").style("width:100px;")
                 quant_pct = ui.number(label="Quant Dev", value=33, min=0, max=100).classes("dark-input").style("width:100px;")
                 other_pct = ui.number(label="Other", value=34, min=0, max=100).classes("dark-input").style("width:100px;")

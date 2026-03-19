@@ -4,7 +4,6 @@ from nicegui import ui
 from models.schema import AppState, AssetView
 from storage.persistence import save_state
 from components.status_bar import days_since, staleness_color
-from components.macro_views import CONVICTION_BARS, _conviction_bars_html
 
 # Score system: 1 (lowest/red) → 5 (highest/green), — = no view
 SCORE_OPTIONS = ["—", "1", "2", "3", "4", "5"]
@@ -40,12 +39,12 @@ def render_asset_views(state: AppState, save_indicator):
         ui.label("LEVEL 2 — INTRA-ASSET").classes("section-header").style("margin-top:1.5rem;")
 
         with ui.row().classes("w-full").style("gap:1rem; align-items:flex-start; flex-wrap:wrap;"):
-            with ui.column().style("flex:1; min-width:360px; gap:0;"):
+            with ui.column().style("flex:1; min-width:280px; gap:0;"):
                 _group_header("EQUITIES")
                 for av in by_group["equities"]:
                     _l2_row(av, save)
 
-            with ui.column().style("flex:1; min-width:360px; gap:0;"):
+            with ui.column().style("flex:1; min-width:280px; gap:0;"):
                 _group_header("FIXED INCOME")
                 for av in by_group["fixed_income"]:
                     _l2_row(av, save)
@@ -101,8 +100,6 @@ def _l1_row(av: AssetView, save):
             )
         ).classes("dark-input").style("width:90px; flex-shrink:0;")
 
-        _conviction_cycle_btn(av, save)
-
         note_in = ui.input(
             value=av.note,
             placeholder="Cross-asset thesis in one line…"
@@ -131,8 +128,6 @@ def _l2_row(av: AssetView, save):
             )
         ).classes("dark-input").style("width:80px; flex-shrink:0;")
 
-        _conviction_cycle_btn(av, save)
-
         note_in = ui.input(
             value=av.note,
             placeholder="One-line thesis…"
@@ -141,22 +136,6 @@ def _l2_row(av: AssetView, save):
 
         _staleness_label(av, compact=True)
 
-
-def _conviction_cycle_btn(av: AssetView, save):
-    cycle = ["—", "Low", "Medium", "High"]
-    btn = ui.html(_conviction_bars_html(av.conviction)).style(
-        "cursor:pointer; padding:4px 6px; border-radius:4px; "
-        "border:1px solid var(--border); background:var(--bg-input); "
-        "flex-shrink:0; display:inline-flex; align-items:center;"
-    )
-
-    def on_click(e, a=av, b=btn):
-        idx = cycle.index(a.conviction) if a.conviction in cycle else 0
-        a.conviction = cycle[(idx + 1) % len(cycle)]
-        b.set_content(_conviction_bars_html(a.conviction))
-        _touch_save(a, None, None, save)
-
-    btn.on("click", on_click)
 
 
 def _staleness_label(av: AssetView, compact: bool = False):
