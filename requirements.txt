@@ -1,3 +1,4 @@
 nicegui>=1.4
 pydantic>=2.0
 openpyxl>=3.1
+requests>=2.28

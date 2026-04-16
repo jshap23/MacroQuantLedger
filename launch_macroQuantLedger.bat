@@ -9,8 +9,7 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8080 "') do (
 timeout /t 1 /nobreak >nul
 
 echo Starting MacroQuant Ledger...
-call C:\Users\jshap\anaconda3\Scripts\activate.bat C:\Users\jshap\anaconda3
-call conda activate mqledger
+call C:\Users\jshap\miniforge3\Scripts\activate.bat mqledger
 python app.py
 if %errorlevel% neq 0 (
     echo.

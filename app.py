@@ -9,6 +9,7 @@ from components.reconciliation import render_reconciliation
 from components.asset_views import render_asset_views
 from components.briefing_strip import render_briefing_strip
 from components.view_change_log import render_view_change_log
+from components.fred_panel import render_fred_panel
 from models.schema import ViewChangeEntry
 from export.excel import generate_excel
 
@@ -610,12 +611,31 @@ def index():
         s.view_change_log.insert(0, entry)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
+    # ── FRED data: load in background, update panel when ready ────────────────
+    fred_ref = {"container": None}
+
+    async def _load_fred():
+        from nicegui import run
+        from storage.fred_client import fetch_all_indicators
+        try:
+            inds, ts = await run.io_bound(fetch_all_indicators)
+        except Exception as exc:
+            inds, ts = [], f"Error: {exc}"
+        c = fred_ref.get("container")
+        if c is not None:
+            c.clear()
+            with c:
+                render_fred_panel(inds, ts)
+
+    asyncio.ensure_future(_load_fred())
+
     with ui.tabs().classes("w-full") as tabs:
         tab_macro  = ui.tab("Macro Views")
         tab_asset  = ui.tab("Asset Class Views")
         tab_quant  = ui.tab("Quant Development")
         tab_recon  = ui.tab("Weekly Reconciliation")
         tab_log    = ui.tab("Change Log")
+        tab_fred   = ui.tab("Economic Data")
 
     with ui.tab_panels(tabs, value=tab_macro).classes("w-full"):
         with ui.tab_panel(tab_macro):
@@ -633,6 +653,16 @@ def index():
 
         with ui.tab_panel(tab_log):
             render_view_change_log(s, save_indicator)
+
+        with ui.tab_panel(tab_fred):
+            with ui.element("div").style("width:100%;") as _fred_c:
+                with ui.column().style("align-items:center; padding:4rem; gap:0.75rem;"):
+                    ui.spinner("audio", size="2rem", color="#2dd4bf")
+                    ui.label("Fetching FRED data…").style(
+                        "color:var(--text-muted); font-size:0.8rem; "
+                        "letter-spacing:0.08em; font-family:'IBM Plex Mono',monospace;"
+                    )
+            fred_ref["container"] = _fred_c
 
 
 ui.run(title="MacroQuant Ledger", port=8080, reload=False, host="0.0.0.0")
