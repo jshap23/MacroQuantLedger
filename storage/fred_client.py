@@ -472,8 +472,6 @@ def fetch_all_indicators() -> tuple[list, str]:
     gdp_obs    = _fetch("A191RL1Q225SBEA", 40)    # Real GDP QoQ SAAR%, quarterly
     indpro_obs = _fetch("INDPRO", 120)             # Industrial production index, monthly
     pcec96_obs = _fetch("PCEC96", 120)             # Real PCE, monthly
-    napm_obs   = _fetch("NAPM", 120)               # ISM Manufacturing PMI, monthly
-
     ind = _gdp(gdp_obs)
     ind.chart_series = _chart_raw(gdp_obs)
     ind.chart_label = "QoQ SAAR %"
@@ -487,11 +485,6 @@ def fetch_all_indicators() -> tuple[list, str]:
     ind = _activity_yoy(pcec96_obs, "pcec96", "Real Consumer Spending (YoY %, Δpp)", "Activity", 1)
     ind.chart_series = _chart_yoy(pcec96_obs)
     ind.chart_label = "YoY %"
-    indicators.append(ind)
-
-    ind = _level_abs(napm_obs, "napm", "ISM Manufacturing PMI (Δ pts)", "Activity", "{:.1f}", "{:+.1f}", 1)
-    ind.chart_series = _chart_raw(napm_obs)
-    ind.chart_label = "index"
     indicators.append(ind)
 
     # ── Inflation ─────────────────────────────────────────────────────────────
