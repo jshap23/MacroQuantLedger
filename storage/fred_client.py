@@ -472,6 +472,7 @@ def fetch_all_indicators() -> tuple[list, str]:
     gdp_obs    = _fetch("A191RL1Q225SBEA", 40)    # Real GDP QoQ SAAR%, quarterly
     indpro_obs = _fetch("INDPRO", 120)             # Industrial production index, monthly
     pcec96_obs = _fetch("PCEC96", 120)             # Real PCE, monthly
+    napm_obs   = _fetch("NAPM", 120)               # ISM Manufacturing PMI, monthly
 
     ind = _gdp(gdp_obs)
     ind.chart_series = _chart_raw(gdp_obs)
@@ -488,12 +489,18 @@ def fetch_all_indicators() -> tuple[list, str]:
     ind.chart_label = "YoY %"
     indicators.append(ind)
 
+    ind = _level_abs(napm_obs, "napm", "ISM Manufacturing PMI (Δ pts)", "Activity", "{:.1f}", "{:+.1f}", 1)
+    ind.chart_series = _chart_raw(napm_obs)
+    ind.chart_label = "index"
+    indicators.append(ind)
+
     # ── Inflation ─────────────────────────────────────────────────────────────
-    hcpi_obs = _fetch("CPIAUCSL", 120)      # Headline CPI index, monthly
-    cpi_obs  = _fetch("CPILFESL", 120)      # Core CPI index, monthly
-    pce_obs  = _fetch("PCEPILFE", 120)      # Core PCE index, monthly
-    ahe_obs  = _fetch("CES0500000003", 120) # Avg hourly earnings, monthly
-    be_obs   = _fetch("T5YIFR", 400)        # 5Y5Y breakeven, daily
+    hcpi_obs    = _fetch("CPIAUCSL", 120)       # Headline CPI index, monthly
+    cpi_obs     = _fetch("CPILFESL", 120)       # Core CPI index, monthly
+    pce_obs     = _fetch("PCEPILFE", 120)       # Core PCE index, monthly
+    ahe_obs     = _fetch("CES0500000003", 120)  # Avg hourly earnings, monthly
+    shelter_obs = _fetch("CUSR0000SAH1", 120)   # CPI shelter index, monthly
+    be_obs      = _fetch("T5YIFR", 400)         # 5Y5Y breakeven, daily
 
     ind = _infl_ann(hcpi_obs, "headline_cpi", "Headline CPI (%)", "Inflation")
     ind.chart_series = _chart_yoy(hcpi_obs)
@@ -512,6 +519,11 @@ def fetch_all_indicators() -> tuple[list, str]:
 
     ind = _infl_ann(ahe_obs, "ahe", "Avg Hourly Earnings (%)", "Inflation")
     ind.chart_series = _chart_yoy(ahe_obs)
+    ind.chart_label = "YoY %"
+    indicators.append(ind)
+
+    ind = _infl_ann(shelter_obs, "shelter_cpi", "Shelter CPI (%)", "Inflation")
+    ind.chart_series = _chart_yoy(shelter_obs)
     ind.chart_label = "YoY %"
     indicators.append(ind)
 
@@ -567,6 +579,7 @@ def fetch_all_indicators() -> tuple[list, str]:
     hy_obs      = _fetch("BAMLH0A0HYM2", 400)   # HY OAS, daily, in %
     ig_obs      = _fetch("BAMLC0A0CM",   400)   # IG OAS, daily, in %
     lending_obs = _fetch("DRTSCILM",      40)   # Bank lending standards, quarterly
+    nfci_obs    = _fetch("NFCI",         400)   # Chicago Fed National Financial Conditions Index, weekly
 
     ind = _rate_bps(hy_obs, "hy_oas", "HY OAS (%, Δbp)", "Credit", -1)
     ind.chart_series = _chart_raw(hy_obs)
@@ -582,6 +595,12 @@ def fetch_all_indicators() -> tuple[list, str]:
                      "{:.1f}", "{:+.1f}", -1)
     ind.chart_series = _chart_raw(lending_obs)
     ind.chart_label = "net % tightening"
+    indicators.append(ind)
+
+    ind = _level_abs(nfci_obs, "nfci", "National Financial Conditions Index (Δ)", "Credit",
+                     "{:.2f}", "{:+.2f}", -1)
+    ind.chart_series = _chart_raw(nfci_obs)
+    ind.chart_label = "index"
     indicators.append(ind)
 
     # ── Risk & Markets ────────────────────────────────────────────────────────
@@ -605,11 +624,12 @@ def fetch_all_indicators() -> tuple[list, str]:
     indicators.append(ind)
 
     # ── FX & Commodities ──────────────────────────────────────────────────────
-    eurusd_obs = _fetch("DEXUSEU",   400)
-    usdcny_obs = _fetch("DEXCHUS",   400)
-    usdjpy_obs = _fetch("DEXJPUS",   400)
-    dxy_obs    = _fetch("DTWEXBGS",  300)   # weekly broad dollar index
-    wti_obs    = _fetch("DCOILWTICO",400)
+    eurusd_obs = _fetch("DEXUSEU",        400)
+    usdcny_obs = _fetch("DEXCHUS",        400)
+    usdjpy_obs = _fetch("DEXJPUS",        400)
+    dxy_obs    = _fetch("DTWEXBGS",       300)   # weekly broad dollar index
+    wti_obs    = _fetch("DCOILWTICO",     400)
+    gold_obs   = _fetch("GOLDAMGBD228NLBM", 400) # Gold London PM fix, USD/troy ounce
 
     ind = _pct_chg(eurusd_obs, "eurusd", "EUR/USD (Δ%)", "FX & Commodities", 0, "{:.4f}")
     ind.chart_series = _chart_raw(eurusd_obs)
@@ -634,6 +654,11 @@ def fetch_all_indicators() -> tuple[list, str]:
     ind = _pct_chg(wti_obs, "wti", "WTI Crude ($, Δ%)", "FX & Commodities", 0, "${:.2f}")
     ind.chart_series = _chart_raw(wti_obs)
     ind.chart_label = "$/barrel"
+    indicators.append(ind)
+
+    ind = _pct_chg(gold_obs, "gold", "Gold ($/oz, Δ%)", "FX & Commodities", 0, "${:,.0f}")
+    ind.chart_series = _chart_raw(gold_obs)
+    ind.chart_label = "$/oz"
     indicators.append(ind)
 
     return indicators, timestamp
