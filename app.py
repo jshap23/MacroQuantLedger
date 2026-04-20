@@ -12,6 +12,7 @@ from components.view_change_log import render_view_change_log
 from components.fred_panel import render_fred_panel
 from models.schema import ViewChangeEntry
 from export.excel import generate_excel
+from export.obsidian import generate_obsidian_note
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 CUSTOM_CSS = """
@@ -500,6 +501,23 @@ def index():
                 ui.download(str(path))
 
             ui.button("Export Excel", on_click=do_export).classes("export-btn")
+
+            def do_export_obsidian():
+                try:
+                    path = generate_obsidian_note(s)
+                    ui.notify(
+                        f"Obsidian note written: {path}",
+                        type="positive",
+                        position="top",
+                    )
+                except OSError as exc:
+                    ui.notify(f"Could not write Obsidian note: {exc}", type="negative", position="top")
+
+            ui.button(
+                "Obsidian",
+                icon="edit_note",
+                on_click=do_export_obsidian,
+            ).classes("export-btn").tooltip("Export markdown to JS_Obsidian/MacroQuant")
 
             def do_export_json():
                 ui.download(str(STATE_FILE), "macroquant_state.json")
