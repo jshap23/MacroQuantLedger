@@ -8,6 +8,7 @@ env/
 
 # Data (local state and exports — not committed)
 data/state.json
+data/snapshots/*.json
 data/*.xlsx
 
 # Conda
