@@ -12,6 +12,8 @@ import requests
 
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
+FINNHUB_BASE = "https://finnhub.io/api/v1"
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +43,7 @@ GROUPS = [
     "Rates & Curve",
     "Credit",
     "Risk & Markets",
+    "Equities",
     "FX & Commodities",
 ]
 
@@ -422,6 +425,68 @@ def _level_abs(obs: list, id: str, name: str, group: str,
     )
 
 
+# ── Finnhub: Gold (GLD ETF quote) ────────────────────────────────────────────
+
+def _fetch_gold_finnhub() -> Indicator:
+    return _finnhub_etf_indicator("GLD", "Gold — GLD ETF ($/sh, Day Δ)", "FX & Commodities")
+
+
+# ── Finnhub: ETF quote → Indicator ───────────────────────────────────────────
+
+_ETF_COL_HEADERS = ("Day Δ", "Day %", "Prev")
+
+def _finnhub_etf_indicator(symbol: str, name: str, group: str) -> Indicator:
+    """Fetch a single ETF quote from Finnhub and return an Indicator.
+
+    Columns: Day Δ (absolute) / Day % / Previous close.
+    """
+    col_headers = _ETF_COL_HEADERS
+    id_ = symbol.lower()
+
+    if not FINNHUB_API_KEY:
+        return _err(id_, name, group, col_headers)
+
+    try:
+        r = requests.get(
+            f"{FINNHUB_BASE}/quote",
+            params={"symbol": symbol},
+            headers={"X-Finnhub-Token": FINNHUB_API_KEY},
+            timeout=10,
+        )
+        r.raise_for_status()
+        q = r.json()
+        current = q.get("c") or 0.0
+        day_chg = q.get("d")
+        day_pct = q.get("dp")
+        prev    = q.get("pc") or 0.0
+        ts      = q.get("t")
+        as_of   = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "—"
+
+        if not current:
+            return _err(id_, name, group, col_headers)
+
+        def _color(v):
+            if v is None or v == 0:
+                return _NEUTRAL
+            return _GREEN if v > 0 else _RED
+
+        return Indicator(
+            id=id_, name=name, group=group,
+            as_of=as_of,
+            col_headers=col_headers,
+            value_label=f"${current:,.2f}",
+            d3m_label=_fmt(day_chg, "{:+.2f}") if day_chg is not None else "—",
+            d3m_color=_color(day_chg),
+            d6m_label=(_fmt(day_pct, "{:+.2f}") + "%") if day_pct is not None else "—",
+            d6m_color=_color(day_pct),
+            d12m_label=f"${prev:,.2f}",
+            d12m_color=_NEUTRAL,
+        )
+    except Exception as exc:
+        logger.warning("Finnhub ETF fetch failed [%s]: %s", symbol, exc)
+        return _err(id_, name, group, col_headers)
+
+
 # ── Master fetch ──────────────────────────────────────────────────────────────
 
 def fetch_all_indicators() -> tuple[list, str]:
@@ -616,13 +681,22 @@ def fetch_all_indicators() -> tuple[list, str]:
     ind.chart_label = "index"
     indicators.append(ind)
 
+    # ── Equities (Finnhub ETF quotes) ─────────────────────────────────────────
+    indicators.append(_finnhub_etf_indicator("IWM", "Small Caps — IWM (Day Δ)",              "Equities"))
+    indicators.append(_finnhub_etf_indicator("EEM", "Emerging Markets — EEM (Day Δ)",        "Equities"))
+    indicators.append(_finnhub_etf_indicator("EFA", "Intl Developed — EFA (Day Δ)",          "Equities"))
+    indicators.append(_finnhub_etf_indicator("XLF", "Financials — XLF (Day Δ)",              "Equities"))
+    indicators.append(_finnhub_etf_indicator("XLK", "Technology — XLK (Day Δ)",              "Equities"))
+    indicators.append(_finnhub_etf_indicator("XLE", "Energy — XLE (Day Δ)",                  "Equities"))
+    indicators.append(_finnhub_etf_indicator("XLI", "Industrials — XLI (Day Δ)",             "Equities"))
+    indicators.append(_finnhub_etf_indicator("XLU", "Utilities — XLU (Day Δ)",               "Equities"))
+
     # ── FX & Commodities ──────────────────────────────────────────────────────
-    eurusd_obs = _fetch("DEXUSEU",        400)
-    usdcny_obs = _fetch("DEXCHUS",        400)
-    usdjpy_obs = _fetch("DEXJPUS",        400)
-    dxy_obs    = _fetch("DTWEXBGS",       300)   # weekly broad dollar index
-    wti_obs    = _fetch("DCOILWTICO",     400)
-    gold_obs   = _fetch("GOLDAMGBD228NLBM", 400) # Gold London PM fix, USD/troy ounce
+    eurusd_obs = _fetch("DEXUSEU",    400)
+    usdcny_obs = _fetch("DEXCHUS",    400)
+    usdjpy_obs = _fetch("DEXJPUS",    400)
+    dxy_obs    = _fetch("DTWEXBGS",   300)   # weekly broad dollar index
+    wti_obs    = _fetch("DCOILWTICO", 400)
 
     ind = _pct_chg(eurusd_obs, "eurusd", "EUR/USD (Δ%)", "FX & Commodities", 0, "{:.4f}")
     ind.chart_series = _chart_raw(eurusd_obs)
@@ -649,9 +723,6 @@ def fetch_all_indicators() -> tuple[list, str]:
     ind.chart_label = "$/barrel"
     indicators.append(ind)
 
-    ind = _pct_chg(gold_obs, "gold", "Gold ($/oz, Δ%)", "FX & Commodities", 0, "${:,.0f}")
-    ind.chart_series = _chart_raw(gold_obs)
-    ind.chart_label = "$/oz"
-    indicators.append(ind)
+    indicators.append(_fetch_gold_finnhub())
 
     return indicators, timestamp
