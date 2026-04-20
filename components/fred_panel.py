@@ -16,6 +16,7 @@ _MONO    = "'IBM Plex Mono','Courier New',monospace"
 # Column headers per group (override default "3M / 6M / 12M")
 _GROUP_HEADERS: dict[str, tuple] = {
     "Inflation": ("3M Ann", "6M Ann", "12M YoY"),
+    "Equities":  ("3M %",   "6M %",   "12M %"),
 }
 _DEFAULT_HEADERS = ("3M", "6M", "12M")
 
