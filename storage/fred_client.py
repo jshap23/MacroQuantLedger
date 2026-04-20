@@ -425,66 +425,121 @@ def _level_abs(obs: list, id: str, name: str, group: str,
     )
 
 
-# ── Finnhub: Gold (GLD ETF quote) ────────────────────────────────────────────
+# ── ETF indicators (yfinance history + Finnhub real-time quote) ──────────────
 
-def _fetch_gold_finnhub() -> Indicator:
-    return _finnhub_etf_indicator("GLD", "Gold — GLD ETF ($/sh, Day Δ)", "FX & Commodities")
+_ETF_SYMBOLS = {
+    "GLD": ("Gold — GLD ETF ($)",              "FX & Commodities"),
+    "IWM": ("Small Caps — IWM ($)",            "Equities"),
+    "EEM": ("Emerging Markets — EEM ($)",      "Equities"),
+    "EFA": ("Intl Developed — EFA ($)",        "Equities"),
+    "XLF": ("Financials — XLF ($)",            "Equities"),
+    "XLK": ("Technology — XLK ($)",            "Equities"),
+    "XLE": ("Energy — XLE ($)",                "Equities"),
+    "XLI": ("Industrials — XLI ($)",           "Equities"),
+    "XLU": ("Utilities — XLU ($)",             "Equities"),
+}
+
+_ETF_COL_HEADERS = ("3M %", "6M %", "12M %")
 
 
-# ── Finnhub: ETF quote → Indicator ───────────────────────────────────────────
+def _fetch_etf_indicators() -> list:
+    """Fetch all ETF indicators using yfinance for history and Finnhub for current price.
 
-_ETF_COL_HEADERS = ("Day Δ", "Day %", "Prev")
-
-def _finnhub_etf_indicator(symbol: str, name: str, group: str) -> Indicator:
-    """Fetch a single ETF quote from Finnhub and return an Indicator.
-
-    Columns: Day Δ (absolute) / Day % / Previous close.
+    Returns a list of Indicators ordered by _ETF_SYMBOLS insertion order.
+    3M/6M/12M columns show price % change over those horizons.
     """
-    col_headers = _ETF_COL_HEADERS
-    id_ = symbol.lower()
+    import yfinance as yf
 
-    if not FINNHUB_API_KEY:
-        return _err(id_, name, group, col_headers)
+    symbols = list(_ETF_SYMBOLS.keys())
+    results = []
 
+    # ── Finnhub real-time quotes (current price + as-of date) ────────────────
+    fh_quotes: dict[str, dict] = {}
+    if FINNHUB_API_KEY:
+        for sym in symbols:
+            try:
+                r = requests.get(
+                    f"{FINNHUB_BASE}/quote",
+                    params={"symbol": sym},
+                    headers={"X-Finnhub-Token": FINNHUB_API_KEY},
+                    timeout=10,
+                )
+                r.raise_for_status()
+                fh_quotes[sym] = r.json()
+            except Exception as exc:
+                logger.warning("Finnhub quote failed [%s]: %s", sym, exc)
+
+    # ── yfinance historical closes for % change calculations ─────────────────
+    hist: dict[str, list] = {}   # symbol → sorted list of (date_str, close)
     try:
-        r = requests.get(
-            f"{FINNHUB_BASE}/quote",
-            params={"symbol": symbol},
-            headers={"X-Finnhub-Token": FINNHUB_API_KEY},
-            timeout=10,
-        )
-        r.raise_for_status()
-        q = r.json()
-        current = q.get("c") or 0.0
-        day_chg = q.get("d")
-        day_pct = q.get("dp")
-        prev    = q.get("pc") or 0.0
+        raw = yf.download(symbols, period="13mo", auto_adjust=True, progress=False)["Close"]
+        raw = raw.dropna(how="all")
+        for sym in symbols:
+            if sym in raw.columns:
+                series = raw[sym].dropna()
+                hist[sym] = [
+                    (d.strftime("%Y-%m-%d"), float(v))
+                    for d, v in zip(series.index, series.values)
+                ]
+    except Exception as exc:
+        logger.warning("yfinance bulk download failed: %s", exc)
+
+    # ── Build one Indicator per ETF ───────────────────────────────────────────
+    def _pct(v_new, v_old):
+        if v_old and v_old != 0:
+            return (v_new / v_old - 1) * 100
+        return None
+
+    def _color(v):
+        if v is None or v == 0:
+            return _NEUTRAL
+        return _GREEN if v > 0 else _RED
+
+    for sym, (name, group) in _ETF_SYMBOLS.items():
+        id_ = sym.lower()
+        col_headers = _ETF_COL_HEADERS
+
+        prices = hist.get(sym, [])
+        q      = fh_quotes.get(sym, {})
+        current = q.get("c") or (prices[-1][1] if prices else None)
         ts      = q.get("t")
-        as_of   = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "—"
+        as_of   = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else (prices[-1][0] if prices else "—")
 
-        if not current:
-            return _err(id_, name, group, col_headers)
+        if not current or not prices:
+            results.append(_err(id_, name, group, col_headers))
+            continue
 
-        def _color(v):
-            if v is None or v == 0:
-                return _NEUTRAL
-            return _GREEN if v > 0 else _RED
+        # Find closes ~63 / 126 / 252 trading days ago
+        def _close_n_days_ago(n: int) -> float | None:
+            idx = max(0, len(prices) - 1 - n)
+            return prices[idx][1] if prices else None
 
-        return Indicator(
+        p3m  = _close_n_days_ago(63)
+        p6m  = _close_n_days_ago(126)
+        p12m = _close_n_days_ago(252)
+
+        d3  = _pct(current, p3m)
+        d6  = _pct(current, p6m)
+        d12 = _pct(current, p12m)
+
+        chart = [{"date": d, "value": round(v, 4)} for d, v in prices]
+
+        results.append(Indicator(
             id=id_, name=name, group=group,
             as_of=as_of,
             col_headers=col_headers,
             value_label=f"${current:,.2f}",
-            d3m_label=_fmt(day_chg, "{:+.2f}") if day_chg is not None else "—",
-            d3m_color=_color(day_chg),
-            d6m_label=(_fmt(day_pct, "{:+.2f}") + "%") if day_pct is not None else "—",
-            d6m_color=_color(day_pct),
-            d12m_label=f"${prev:,.2f}",
-            d12m_color=_NEUTRAL,
-        )
-    except Exception as exc:
-        logger.warning("Finnhub ETF fetch failed [%s]: %s", symbol, exc)
-        return _err(id_, name, group, col_headers)
+            d3m_label=(_fmt(d3, "{:+.1f}") + "%") if d3 is not None else "—",
+            d3m_color=_color(d3),
+            d6m_label=(_fmt(d6, "{:+.1f}") + "%") if d6 is not None else "—",
+            d6m_color=_color(d6),
+            d12m_label=(_fmt(d12, "{:+.1f}") + "%") if d12 is not None else "—",
+            d12m_color=_color(d12),
+            chart_series=chart,
+            chart_label="$/share",
+        ))
+
+    return results
 
 
 # ── Master fetch ──────────────────────────────────────────────────────────────
@@ -681,15 +736,8 @@ def fetch_all_indicators() -> tuple[list, str]:
     ind.chart_label = "index"
     indicators.append(ind)
 
-    # ── Equities (Finnhub ETF quotes) ─────────────────────────────────────────
-    indicators.append(_finnhub_etf_indicator("IWM", "Small Caps — IWM (Day Δ)",              "Equities"))
-    indicators.append(_finnhub_etf_indicator("EEM", "Emerging Markets — EEM (Day Δ)",        "Equities"))
-    indicators.append(_finnhub_etf_indicator("EFA", "Intl Developed — EFA (Day Δ)",          "Equities"))
-    indicators.append(_finnhub_etf_indicator("XLF", "Financials — XLF (Day Δ)",              "Equities"))
-    indicators.append(_finnhub_etf_indicator("XLK", "Technology — XLK (Day Δ)",              "Equities"))
-    indicators.append(_finnhub_etf_indicator("XLE", "Energy — XLE (Day Δ)",                  "Equities"))
-    indicators.append(_finnhub_etf_indicator("XLI", "Industrials — XLI (Day Δ)",             "Equities"))
-    indicators.append(_finnhub_etf_indicator("XLU", "Utilities — XLU (Day Δ)",               "Equities"))
+    # ── Equities + Gold ETF (yfinance history, Finnhub real-time price) ─────────
+    indicators.extend(_fetch_etf_indicators())
 
     # ── FX & Commodities ──────────────────────────────────────────────────────
     eurusd_obs = _fetch("DEXUSEU",    400)
