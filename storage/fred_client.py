@@ -771,6 +771,4 @@ def fetch_all_indicators() -> tuple[list, str]:
     ind.chart_label = "$/barrel"
     indicators.append(ind)
 
-    indicators.append(_fetch_gold_finnhub())
-
     return indicators, timestamp
