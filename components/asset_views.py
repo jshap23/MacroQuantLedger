@@ -79,6 +79,18 @@ def _score_dot_style(score: str) -> str:
     )
 
 
+def _note_preview_input(av: AssetView, save, *, placeholder: str, font_size: str | None):
+    """Read-only note strip; click opens the full editor (no separate expand button)."""
+    style = "flex:1; min-width:0; cursor:pointer;"
+    if font_size:
+        style += f" font-size:{font_size};"
+    note_in = ui.input(value=av.note, placeholder=placeholder).classes("dark-input").style(style)
+    note_in.props("readonly")
+    note_in.tooltip("Click to edit note")
+    note_in.on("click", lambda _: _open_note_dialog(av, note_in, save))
+    return note_in
+
+
 def _l1_row(av: AssetView, save):
     sc = SCORE_COLORS.get(av.direction, SCORE_COLORS["—"])
 
@@ -100,11 +112,12 @@ def _l1_row(av: AssetView, save):
             )
         ).classes("dark-input").style("width:90px; flex-shrink:0;")
 
-        note_in = ui.input(
-            value=av.note,
-            placeholder="Cross-asset thesis in one line…"
-        ).classes("dark-input").style("flex:1; min-width:0;")
-        note_in.on("blur", lambda _, a=av, ni=note_in: _touch_save(a, "note", ni.value, save))
+        _note_preview_input(
+            av,
+            save,
+            placeholder="Click to edit cross-asset thesis…",
+            font_size=None,
+        )
 
         _staleness_label(av)
 
@@ -128,11 +141,12 @@ def _l2_row(av: AssetView, save):
             )
         ).classes("dark-input").style("width:80px; flex-shrink:0;")
 
-        note_in = ui.input(
-            value=av.note,
-            placeholder="One-line thesis…"
-        ).classes("dark-input").style("flex:1; min-width:0; font-size:0.82rem;")
-        note_in.on("blur", lambda _, a=av, ni=note_in: _touch_save(a, "note", ni.value, save))
+        _note_preview_input(
+            av,
+            save,
+            placeholder="Click to edit thesis…",
+            font_size="0.82rem",
+        )
 
         _staleness_label(av, compact=True)
 
@@ -209,3 +223,37 @@ def _touch_save(av: AssetView, field: str | None, value, save):
         setattr(av, field, value)
     av.last_touched = datetime.now(tz=timezone.utc)
     save()
+
+
+def _open_note_dialog(av: AssetView, note_in, save):
+    """Modal editor for the row note (av.note); syncs inline input on Done."""
+    with ui.dialog() as dialog, ui.card().style(
+        "background:var(--bg-card); color:var(--text-primary); "
+        "font-family:'IBM Plex Mono',monospace; min-width:min(560px,92vw); padding:1.5rem;"
+    ):
+        ui.label(av.name).style(
+            "font-size:1rem; font-weight:700; color:var(--accent); margin-bottom:0.75rem;"
+        )
+        ta = ui.textarea(
+            placeholder="Thesis, risks, catalysts — as much detail as you need…",
+        ).classes("w-full dark-input").style("min-height:min(280px,40vh); font-size:0.88rem;")
+        ta.value = note_in.value
+
+        def on_done():
+            _touch_save(av, "note", ta.value, save)
+            note_in.set_value(av.note)
+            dialog.close()
+
+        with ui.row().style("gap:0.5rem; justify-content:flex-end; margin-top:1rem;"):
+            ui.button("Cancel", on_click=dialog.close).style(
+                "background:transparent; color:var(--text-muted); "
+                "border:1px solid var(--border); box-shadow:none; "
+                "font-family:'IBM Plex Mono',monospace;"
+            )
+            ui.button("Done", on_click=on_done).style(
+                "background:var(--accent); color:var(--bg-primary); "
+                "border:1px solid var(--accent); box-shadow:none; "
+                "font-family:'IBM Plex Mono',monospace; font-weight:700;"
+            )
+
+    dialog.open()

@@ -1,0 +1,275 @@
+{
+  "macro_views": [
+    {
+      "id": "growth",
+      "name": "US Growth",
+      "lean": "",
+      "signals": [
+        "",
+        "",
+        ""
+      ],
+      "counter": "",
+      "direction": "No View",
+      "conviction": "—",
+      "flag": "green",
+      "last_touched": null
+    },
+    {
+      "id": "global_growth",
+      "name": "Global Growth",
+      "lean": "",
+      "signals": [
+        "",
+        "",
+        ""
+      ],
+      "counter": "",
+      "direction": "Bearish",
+      "conviction": "—",
+      "flag": "green",
+      "last_touched": "2026-03-18T03:15:50.176952Z"
+    },
+    {
+      "id": "inflation",
+      "name": "Inflation",
+      "lean": "",
+      "signals": [
+        "",
+        "",
+        ""
+      ],
+      "counter": "",
+      "direction": "Bullish",
+      "conviction": "—",
+      "flag": "green",
+      "last_touched": "2026-03-18T03:15:44.946853Z"
+    },
+    {
+      "id": "fed",
+      "name": "Fed Policy Path",
+      "lean": "",
+      "signals": [
+        "",
+        "",
+        ""
+      ],
+      "counter": "",
+      "direction": "Neutral",
+      "conviction": "—",
+      "flag": "green",
+      "last_touched": "2026-03-18T03:15:41.262187Z"
+    },
+    {
+      "id": "term_premium",
+      "name": "Term Premium",
+      "lean": "",
+      "signals": [
+        "",
+        "",
+        ""
+      ],
+      "counter": "",
+      "direction": "No View",
+      "conviction": "—",
+      "flag": "green",
+      "last_touched": null
+    },
+    {
+      "id": "credit",
+      "name": "Credit",
+      "lean": "",
+      "signals": [
+        "",
+        "",
+        ""
+      ],
+      "counter": "",
+      "direction": "No View",
+      "conviction": "—",
+      "flag": "green",
+      "last_touched": null
+    },
+    {
+      "id": "usd",
+      "name": "USD",
+      "lean": "",
+      "signals": [
+        "",
+        "",
+        ""
+      ],
+      "counter": "",
+      "direction": "No View",
+      "conviction": "—",
+      "flag": "green",
+      "last_touched": null
+    }
+  ],
+  "macro_notes": "",
+  "asset_views": [
+    {
+      "id": "stocks_bonds",
+      "name": "Stocks vs Bonds",
+      "group": "l1",
+      "direction": "4",
+      "conviction": "High",
+      "note": "Nominal growth is solid and plenty of room for earnings to be ",
+      "commentary": "So I can reset data, but not upload old data. I want to make it easier to pass along data and make updates. Make sure this is considered and develop a framework to do this.",
+      "last_touched": "2026-03-18T22:31:32.230442Z"
+    },
+    {
+      "id": "eq_us_lc",
+      "name": "US LC",
+      "group": "equities",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:13:45.841612Z"
+    },
+    {
+      "id": "eq_us_smid",
+      "name": "US SMID",
+      "group": "equities",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:13:21.622520Z"
+    },
+    {
+      "id": "eq_europe",
+      "name": "Europe",
+      "group": "equities",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:13:15.524525Z"
+    },
+    {
+      "id": "eq_japan",
+      "name": "Japan",
+      "group": "equities",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:15:55.570597Z"
+    },
+    {
+      "id": "eq_em_xch",
+      "name": "EM x China",
+      "group": "equities",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:15:57.177897Z"
+    },
+    {
+      "id": "eq_china",
+      "name": "China",
+      "group": "equities",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:17:41.264647Z"
+    },
+    {
+      "id": "eq_pe",
+      "name": "Private Equity",
+      "group": "equities",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T22:31:13.884701Z"
+    },
+    {
+      "id": "fi_tsy",
+      "name": "US Treasuries",
+      "group": "fixed_income",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:13:48.238236Z"
+    },
+    {
+      "id": "fi_sec",
+      "name": "Securitized Credit",
+      "group": "fixed_income",
+      "direction": "1",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T22:31:25.333641Z"
+    },
+    {
+      "id": "fi_lev",
+      "name": "Leveraged Credit",
+      "group": "fixed_income",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:13:23.912576Z"
+    },
+    {
+      "id": "fi_global",
+      "name": "Global Bonds",
+      "group": "fixed_income",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": "2026-03-18T03:13:43.821801Z"
+    },
+    {
+      "id": "fi_em",
+      "name": "EM Debt",
+      "group": "fixed_income",
+      "direction": "—",
+      "conviction": "—",
+      "note": "",
+      "commentary": "",
+      "last_touched": null
+    }
+  ],
+  "quant_tracker": {
+    "projects": [
+      {
+        "id": "c82f4dca-9eef-4713-8fbd-98f7bb6fc1d1",
+        "name": "",
+        "status": "",
+        "next_step": "",
+        "priority": "—",
+        "last_touched": null
+      }
+    ],
+    "skills": [
+      {
+        "id": "9fad56ba-45d5-41e1-b53b-064e089e4074",
+        "name": "",
+        "level": "—",
+        "building": "",
+        "interview_relevance": "—",
+        "last_touched": null
+      }
+    ],
+    "readiness": [
+      {
+        "id": "73bf0920-f063-40d5-ab2b-3c25abc7209b",
+        "area": "",
+        "strength": "",
+        "evidence": "",
+        "action": "",
+        "last_touched": null
+      }
+    ]
+  },
+  "reconciliations": []
+}

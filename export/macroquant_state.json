@@ -1,0 +1,286 @@
+{
+  "macro_views": [
+    {
+      "id": "growth",
+      "name": "US Growth",
+      "lean": "Running around neutral, Oil Shock sterilizes growth impulse from tax cuts + rebates. Consumer spending has been solid.",
+      "signals": [
+        "ISM New Orders rocketed higher into expansion. Fiscal Deficit 7%.",
+        "Corporate earnings remain strong and looking to be double digits.",
+        "FCI is supportive. Wealth effect and easy credit conditions (low credit spreads)"
+      ],
+      "counter": "Labor market is in no hiring and no firing mode. At a stand-still.",
+      "direction": "Bullish",
+      "conviction": "Low",
+      "flag": "green",
+      "last_touched": "2026-03-19T01:11:51.832785Z"
+    },
+    {
+      "id": "global_growth",
+      "name": "Global Growth",
+      "lean": "Cyclical upswing is challenged by higher energy costs as a result of the middle-east war.",
+      "signals": [
+        "Oil prices at 110.",
+        "Financial asset returns. Safe-haven dollar gaining and EM down 10%.",
+        "Stimulus still there from US, EMU, and China. Meaningful offset."
+      ],
+      "counter": "Futures points towards a quick resolution of the war.",
+      "direction": "Neutral",
+      "conviction": "Medium",
+      "flag": "green",
+      "last_touched": "2026-03-18T23:43:25.968735Z"
+    },
+    {
+      "id": "inflation",
+      "name": "Inflation",
+      "lean": "First a supply shock from tariffs and now a supply shock from Energy. Only so much you can strip out of the index, regardless we have another round of inflation, albeit modest.",
+      "signals": [
+        "CPI and PPI hotter",
+        "",
+        ""
+      ],
+      "counter": "Shelter Inflation coming in weaker. Tariffs are far less impactful than headline figures and energy shock could quickly reverse.",
+      "direction": "Bullish",
+      "conviction": "Low",
+      "flag": "green",
+      "last_touched": "2026-03-18T23:46:31.562903Z"
+    },
+    {
+      "id": "fed",
+      "name": "Fed Policy Path",
+      "lean": "One more cut, hard to see the labor market going into an upswing after the start of a war.",
+      "signals": [
+        "NFP negative 90K & string of downward revisions",
+        "unemployed to job openings < 1",
+        "Margins remains very strong"
+      ],
+      "counter": "Oil shock and war lasts a while means next move could even be a hike",
+      "direction": "Bullish",
+      "conviction": "High",
+      "flag": "green",
+      "last_touched": "2026-03-19T01:10:53.861340Z"
+    },
+    {
+      "id": "term_premium",
+      "name": "Term Premium",
+      "lean": "has steepened enough. Potentially a bit more bull steepening.",
+      "signals": [
+        "Term premium vs Cycle",
+        "Fiscal deficits",
+        ""
+      ],
+      "counter": "",
+      "direction": "Neutral",
+      "conviction": "Medium",
+      "flag": "green",
+      "last_touched": "2026-03-19T01:11:54.691057Z"
+    },
+    {
+      "id": "credit",
+      "name": "Credit",
+      "lean": "Leak higher but solid positive excess returns over a year. Defaults increase but limited contagion from problem sectors",
+      "signals": [
+        "HY defaults are still low",
+        "ex Software spreads have only nudged higher",
+        "Equity markets are also stable."
+      ],
+      "counter": "War going on and everything can be disrupted by AI",
+      "direction": "Bullish",
+      "conviction": "High",
+      "flag": "green",
+      "last_touched": "2026-03-19T01:13:11.362010Z"
+    },
+    {
+      "id": "usd",
+      "name": "USD",
+      "lean": "stable. Clearly still a safe-haven.",
+      "signals": [
+        "safe haven buying",
+        "yields higher in Germany but dollar still up, on some trading days",
+        "US Assets outperforming RoW through this shock, energy indepdence."
+      ],
+      "counter": "Institutions continue to be degraded by uni-lateral military action.  medium term dollar bearish.",
+      "direction": "Bearish",
+      "conviction": "Medium",
+      "flag": "green",
+      "last_touched": "2026-03-19T01:14:40.720945Z"
+    }
+  ],
+  "macro_notes": "",
+  "asset_views": [
+    {
+      "id": "stocks_bonds",
+      "name": "Stocks vs Bonds",
+      "group": "l1",
+      "direction": "4",
+      "conviction": "High",
+      "note": "Nominal growth is solid and plenty of room for earnings to be ",
+      "commentary": "So I can reset data, but not upload old data. I want to make it easier to pass along data and make updates. Make sure this is considered and develop a framework to do this.",
+      "last_touched": "2026-03-19T01:32:50.191251Z"
+    },
+    {
+      "id": "eq_us_lc",
+      "name": "US LC",
+      "group": "equities",
+      "direction": "4",
+      "conviction": "—",
+      "note": "Rerating of Mag-7 good entry point & index has gone sideways form 6 months.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:32:48.655018Z"
+    },
+    {
+      "id": "eq_us_smid",
+      "name": "US SMID",
+      "group": "equities",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Bad cycle position. Could benefit from cyclical upswing, if it comes.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:19:42.518204Z"
+    },
+    {
+      "id": "eq_europe",
+      "name": "Europe",
+      "group": "equities",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Watch out for gas prices. Very vulnerable to Energy shock.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:19:43.004258Z"
+    },
+    {
+      "id": "eq_japan",
+      "name": "Japan",
+      "group": "equities",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Playing with fire politically. Doesn't look insulated from the geopolitical vol.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:20:09.659741Z"
+    },
+    {
+      "id": "eq_em_xch",
+      "name": "EM x China",
+      "group": "equities",
+      "direction": "3",
+      "conviction": "—",
+      "note": "Medium term, main beneficiary from a weak dollar. Need better growth picture to get overweight.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:20:34.598043Z"
+    },
+    {
+      "id": "eq_china",
+      "name": "China",
+      "group": "equities",
+      "direction": "4",
+      "conviction": "—",
+      "note": "Innovation sector. China slow bull market.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:20:52.308441Z"
+    },
+    {
+      "id": "eq_pe",
+      "name": "Private Equity",
+      "group": "equities",
+      "direction": "3",
+      "conviction": "—",
+      "note": "Software is challenged but good alternative to public markets. Growth/VC deliver AI play.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:22:18.840757Z"
+    },
+    {
+      "id": "fi_tsy",
+      "name": "US Treasuries",
+      "group": "fixed_income",
+      "direction": "4",
+      "conviction": "—",
+      "note": "High real yields. Supply shocks should be short lived, and allow UST to hedge risk.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:17:45.297317Z"
+    },
+    {
+      "id": "fi_sec",
+      "name": "Securitized Credit",
+      "group": "fixed_income",
+      "direction": "3",
+      "conviction": "—",
+      "note": "Solid carry available.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:17:59.099355Z"
+    },
+    {
+      "id": "fi_lev",
+      "name": "Leveraged Credit",
+      "group": "fixed_income",
+      "direction": "4",
+      "conviction": "—",
+      "note": "No recession so harvest carry",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:17:57.596522Z"
+    },
+    {
+      "id": "fi_global",
+      "name": "Global Bonds",
+      "group": "fixed_income",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Prefer USD through this volatility. Medium term bullish. ",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:18:31.013455Z"
+    },
+    {
+      "id": "fi_em",
+      "name": "EM Debt",
+      "group": "fixed_income",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Spreads are way too tight for EM$. EM local longer term play.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:18:49.673681Z"
+    }
+  ],
+  "quant_tracker": {
+    "projects": [
+      {
+        "id": "c82f4dca-9eef-4713-8fbd-98f7bb6fc1d1",
+        "name": "",
+        "status": "",
+        "next_step": "",
+        "priority": "—",
+        "last_touched": null
+      }
+    ],
+    "skills": [
+      {
+        "id": "9fad56ba-45d5-41e1-b53b-064e089e4074",
+        "name": "",
+        "level": "—",
+        "building": "",
+        "interview_relevance": "—",
+        "last_touched": "2026-03-19T00:10:00.827851Z"
+      }
+    ],
+    "readiness": [
+      {
+        "id": "73bf0920-f063-40d5-ab2b-3c25abc7209b",
+        "area": "",
+        "strength": "",
+        "evidence": "",
+        "action": "",
+        "last_touched": null
+      }
+    ]
+  },
+  "reconciliations": [
+    {
+      "id": "5c8b4da6-7cb7-4ad5-bb04-a8d459e9b3d5",
+      "date": "2026-03-19T01:16:12.446124Z",
+      "macro_scan": "Been a tough week. Got this Journal up and running.",
+      "quant_check": "Built out Term Structure Model, Feature Analysis.",
+      "time_macro": 33,
+      "time_quant": 33,
+      "time_other": 34,
+      "synthesis": "Learned that CARRY is a huge determinant in trading the curve. Drives 2/3rds of the alpha in my strategy."
+    }
+  ]
+}

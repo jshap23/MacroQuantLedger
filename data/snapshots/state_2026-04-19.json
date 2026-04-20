@@ -1,0 +1,318 @@
+{
+  "macro_views": [
+    {
+      "id": "growth",
+      "name": "US Growth",
+      "lean": "Running around neutral, Oil shock sterilizes growth impulse from tax cuts + rebates.",
+      "signals": [
+        "ISM New Orders rocketed higher into expansion territory & Initial jobless claims remain low. Fiscal Deficit 7%.",
+        "Corporate earnings remain strong and looking to be double digits. + corporate fiscal balances.",
+        "FCI is supportive. Wealth effect and easy credit conditions (low credit spreads)"
+      ],
+      "counter": "Tail risk if hiring picks up. Consumer already hit by rising headline inflation from Energy prices.",
+      "direction": "Bullish",
+      "conviction": "Low",
+      "flag": "green",
+      "last_touched": "2026-04-18T20:57:46.838158Z"
+    },
+    {
+      "id": "global_growth",
+      "name": "Global Growth",
+      "lean": "Middle East war looks to be wrapping up. Energy prices higher will hit global growth, but we have global fiscal stimulus which can make up for the difference.",
+      "signals": [
+        "Oil prices have fallen below 100, so this too shall pass",
+        "Dollar is starting to sell off, and risk is being bid up. Market is telling us things will be better.",
+        "Stimulus still there from US, EMU, and China."
+      ],
+      "counter": "Economic growth has taken several hits and IMF has revised lower their estimates of global growth.",
+      "direction": "Neutral",
+      "conviction": "Medium",
+      "flag": "green",
+      "last_touched": "2026-04-10T17:13:52.353530Z"
+    },
+    {
+      "id": "inflation",
+      "name": "Inflation",
+      "lean": "Headline came in hot. This ties the Fed's hands for the next couple meetings. Core still very tame which gives them an out to keep cutting.",
+      "signals": [
+        "CPI and PPI hotter",
+        "",
+        ""
+      ],
+      "counter": "Shelter Inflation coming in weaker. Tariffs are far less impactful than headline figures and energy shock could quickly reverse.",
+      "direction": "Bullish",
+      "conviction": "Low",
+      "flag": "green",
+      "last_touched": "2026-04-10T17:14:24.568425Z"
+    },
+    {
+      "id": "fed",
+      "name": "Fed Policy Path",
+      "lean": "Still think the Fed will cut. >100 NFP report was a fluke and it will take time for the labor market to heal. Still digesting Capex wave from AI.",
+      "signals": [
+        "Wage growth remains low. Breadth of job gains is quite poor.",
+        "unemployed to job openings has decreased quite a bit, up in last report around 1",
+        "Margins remains very strong"
+      ],
+      "counter": "ISM in expansion, and if a cyclical upswing is real, hiring should follow.",
+      "direction": "Bullish",
+      "conviction": "High",
+      "flag": "green",
+      "last_touched": "2026-04-10T17:25:11.032442Z"
+    },
+    {
+      "id": "term_premium",
+      "name": "Term Premium",
+      "lean": "More steepening. The Fed wants to cut, and we are spending irresponsibly. In the near-term, bonds provide a hedge which will be bid.",
+      "signals": [
+        "Term premium vs Cycle",
+        "Fiscal deficits",
+        ""
+      ],
+      "counter": "",
+      "direction": "Neutral",
+      "conviction": "Medium",
+      "flag": "green",
+      "last_touched": "2026-04-10T17:18:05.439891Z"
+    },
+    {
+      "id": "credit",
+      "name": "Credit",
+      "lean": "Leak higher but solid positive excess returns over a year. Defaults increase but limited contagion from problem sectors. Private Credit will disappoint for the next couple quarters, as market learns how evergreen work. ",
+      "signals": [
+        "HY defaults are still low",
+        "Loans have generated Positive TR YTD despite poor sentiment.",
+        "Fundamentals can improve now that war is over"
+      ],
+      "counter": "SAAS apocalypse dents loan market and direct lending. Large redemptions continue out of evergreen direct lending vehicles.",
+      "direction": "Neutral",
+      "conviction": "High",
+      "flag": "green",
+      "last_touched": "2026-04-10T17:19:57.368905Z"
+    },
+    {
+      "id": "usd",
+      "name": "USD",
+      "lean": "stable. Clearly still a safe-haven. Will leak lower with solid global growth.",
+      "signals": [
+        "safe haven buying",
+        "yields higher in Germany but dollar still up, on some trading days",
+        "US Assets outperforming RoW through this shock, energy indepdence."
+      ],
+      "counter": "Institutions continue to be degraded by uni-lateral military action.  medium term dollar bearish.",
+      "direction": "Bearish",
+      "conviction": "Medium",
+      "flag": "green",
+      "last_touched": "2026-04-10T17:20:24.798561Z"
+    }
+  ],
+  "macro_notes": "",
+  "asset_views": [
+    {
+      "id": "stocks_bonds",
+      "name": "Stocks vs Bonds",
+      "group": "l1",
+      "direction": "4",
+      "conviction": "High",
+      "note": "Nominal growth is solid and plenty of room for earnings to be ",
+      "commentary": "So I can reset data, but not upload old data. I want to make it easier to pass along data and make updates. Make sure this is considered and develop a framework to do this.",
+      "last_touched": "2026-03-19T01:32:50.191251Z"
+    },
+    {
+      "id": "eq_us_lc",
+      "name": "US LC",
+      "group": "equities",
+      "direction": "4",
+      "conviction": "—",
+      "note": "Rerating of Mag-7 good entry point & index has gone sideways form 6 months.",
+      "commentary": "",
+      "last_touched": "2026-04-16T22:18:26.302617Z"
+    },
+    {
+      "id": "eq_us_smid",
+      "name": "US SMID",
+      "group": "equities",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Bad cycle position. Could benefit from cyclical upswing, if it comes.",
+      "commentary": "",
+      "last_touched": "2026-04-16T21:51:06.251951Z"
+    },
+    {
+      "id": "eq_europe",
+      "name": "Europe",
+      "group": "equities",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Watch out for gas prices. Very vulnerable to Energy shock.",
+      "commentary": "",
+      "last_touched": "2026-04-10T17:27:09.215601Z"
+    },
+    {
+      "id": "eq_japan",
+      "name": "Japan",
+      "group": "equities",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Playing with fire politically. Doesn't look insulated from the geopolitical vol.",
+      "commentary": "",
+      "last_touched": "2026-04-10T17:27:04.343692Z"
+    },
+    {
+      "id": "eq_em_xch",
+      "name": "EM x China",
+      "group": "equities",
+      "direction": "3",
+      "conviction": "—",
+      "note": "Medium term, main beneficiary from a weak dollar. Need better growth picture to get overweight. Korea companies will grow earnings as capex cycle continues.",
+      "commentary": "",
+      "last_touched": "2026-04-10T17:27:00.324369Z"
+    },
+    {
+      "id": "eq_china",
+      "name": "China",
+      "group": "equities",
+      "direction": "4",
+      "conviction": "—",
+      "note": "Innovation sector. China slow bull market.",
+      "commentary": "",
+      "last_touched": "2026-04-10T17:26:41.221953Z"
+    },
+    {
+      "id": "eq_pe",
+      "name": "Private Equity",
+      "group": "equities",
+      "direction": "3",
+      "conviction": "—",
+      "note": "Software is challenged but good alternative to public markets. Growth/VC deliver AI play.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:22:18.840757Z"
+    },
+    {
+      "id": "fi_tsy",
+      "name": "US Treasuries",
+      "group": "fixed_income",
+      "direction": "3",
+      "conviction": "—",
+      "note": "High real yields. Growth outlooks looks better so ",
+      "commentary": "",
+      "last_touched": "2026-04-16T21:49:26.032735Z"
+    },
+    {
+      "id": "fi_sec",
+      "name": "Securitized Credit",
+      "group": "fixed_income",
+      "direction": "3",
+      "conviction": "—",
+      "note": "Solid carry available.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:17:59.099355Z"
+    },
+    {
+      "id": "fi_lev",
+      "name": "Leveraged Credit",
+      "group": "fixed_income",
+      "direction": "4",
+      "conviction": "—",
+      "note": "No recession so harvest carry",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:17:57.596522Z"
+    },
+    {
+      "id": "fi_global",
+      "name": "Global Bonds",
+      "group": "fixed_income",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Prefer USD through this volatility. Medium term bullish. ",
+      "commentary": "",
+      "last_touched": "2026-04-10T17:26:38.852822Z"
+    },
+    {
+      "id": "fi_em",
+      "name": "EM Debt",
+      "group": "fixed_income",
+      "direction": "2",
+      "conviction": "—",
+      "note": "Spreads are way too tight for EM$. EM local longer term play.",
+      "commentary": "",
+      "last_touched": "2026-03-19T01:18:49.673681Z"
+    }
+  ],
+  "quant_tracker": {
+    "projects": [
+      {
+        "id": "c82f4dca-9eef-4713-8fbd-98f7bb6fc1d1",
+        "name": "Regime Models",
+        "status": "Getting up and running with Skills and Agents has been challenging. PowerShell is annoying. ",
+        "next_step": "Systematic Investment Strategy with various portfolios. Hopefully something implementable with futures.",
+        "priority": "—",
+        "last_touched": "2026-04-10T17:21:28.994870Z"
+      },
+      {
+        "id": "c3262b58-55d0-44ff-8341-7f9b05df853c",
+        "name": "Term Premium",
+        "status": "Backtest looks great. Running Paper trading account. Decide whether to trade on it.",
+        "next_step": "Potentially implement.",
+        "priority": "—",
+        "last_touched": "2026-04-10T17:22:38.629259Z"
+      }
+    ],
+    "skills": [
+      {
+        "id": "9fad56ba-45d5-41e1-b53b-064e089e4074",
+        "name": "Skills for Github Copilot CLI",
+        "level": "—",
+        "building": "Reviewing repos and implementing",
+        "interview_relevance": "—",
+        "last_touched": "2026-04-10T17:21:50.364619Z"
+      }
+    ],
+    "readiness": [
+      {
+        "id": "73bf0920-f063-40d5-ab2b-3c25abc7209b",
+        "area": "Data science conference coming up",
+        "strength": "",
+        "evidence": "AI tools",
+        "action": "research Regimes",
+        "last_touched": "2026-04-10T17:22:58.064742Z"
+      },
+      {
+        "id": "e7907f73-32e8-4f41-83dd-e871eaee9392",
+        "area": "Strategas Conference",
+        "strength": "",
+        "evidence": "NLP signals.& Macro Views",
+        "action": "review research and write-up views",
+        "last_touched": "2026-04-10T17:23:24.876426Z"
+      }
+    ]
+  },
+  "reconciliations": [
+    {
+      "id": "5c8b4da6-7cb7-4ad5-bb04-a8d459e9b3d5",
+      "date": "2026-03-19T01:16:12.446124Z",
+      "macro_scan": "Been a tough week. Got this Journal up and running.",
+      "quant_check": "Built out Term Structure Model, Feature Analysis.",
+      "time_macro": 33,
+      "time_quant": 33,
+      "time_other": 34,
+      "synthesis": "Learned that CARRY is a huge determinant in trading the curve. Drives 2/3rds of the alpha in my strategy."
+    }
+  ],
+  "briefing": {
+    "top_of_mind": "Trump has TACO'ed, that is priced into markets. Mid-terms mean he has to pivot to pro-growth policy agenda. Arguably we get back to fundamentals and valuation. Question is whether leadership continues, where broadening out of earnings continues, and IT multiples get challenged. Private markets & SAAS is in the cross hairs.",
+    "top_of_mind_touched": "2026-04-18T20:57:43.665043Z"
+  },
+  "view_change_log": [
+    {
+      "id": "54e84377-7d7e-4be2-b519-212df33ebf2a",
+      "timestamp": "2026-04-10T17:18:15.737366Z",
+      "view_id": "credit",
+      "view_name": "Credit",
+      "field": "direction",
+      "old_value": "Bullish",
+      "new_value": "Neutral",
+      "reason": ""
+    }
+  ]
+}

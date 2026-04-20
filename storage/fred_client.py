@@ -428,15 +428,22 @@ def _level_abs(obs: list, id: str, name: str, group: str,
 # ── ETF indicators (yfinance history + Finnhub real-time quote) ──────────────
 
 _ETF_SYMBOLS = {
-    "GLD": ("Gold — GLD ETF ($)",              "FX & Commodities"),
-    "IWM": ("Small Caps — IWM ($)",            "Equities"),
-    "EEM": ("Emerging Markets — EEM ($)",      "Equities"),
-    "EFA": ("Intl Developed — EFA ($)",        "Equities"),
-    "XLF": ("Financials — XLF ($)",            "Equities"),
-    "XLK": ("Technology — XLK ($)",            "Equities"),
-    "XLE": ("Energy — XLE ($)",                "Equities"),
-    "XLI": ("Industrials — XLI ($)",           "Equities"),
-    "XLU": ("Utilities — XLU ($)",             "Equities"),
+    "GLD": ("Gold — GLD ETF ($)",                    "FX & Commodities"),
+    "IWM": ("Small Caps — IWM ($)",                  "Equities"),
+    "EEM": ("Emerging Markets — EEM ($)",          "Equities"),
+    "EFA": ("Intl Developed — EFA ($)",            "Equities"),
+    # Select Sector SPDRs (11), alphabetical by sector name
+    "XLC": ("Communication Services — XLC ($)",      "Equities"),
+    "XLY": ("Consumer Discretionary — XLY ($)",    "Equities"),
+    "XLP": ("Consumer Staples — XLP ($)",           "Equities"),
+    "XLE": ("Energy — XLE ($)",                    "Equities"),
+    "XLF": ("Financials — XLF ($)",                "Equities"),
+    "XLV": ("Health Care — XLV ($)",               "Equities"),
+    "XLI": ("Industrials — XLI ($)",               "Equities"),
+    "XLB": ("Materials — XLB ($)",                  "Equities"),
+    "XLK": ("Technology — XLK ($)",               "Equities"),
+    "XLU": ("Utilities — XLU ($)",                 "Equities"),
+    "XLRE": ("Real Estate — XLRE ($)",              "Equities"),
 }
 
 _ETF_COL_HEADERS = ("3M %", "6M %", "12M %")
