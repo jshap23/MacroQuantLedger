@@ -199,46 +199,7 @@ body.light-mode .saved-toast {
 .dark-input .q-field__label { color: var(--text-muted) !important; }
 .dark-input .q-field__bottom { display: none !important; }
 
-/* ── Macro cards ── */
-.macro-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    margin-bottom: 0.45rem;
-    gap: 0 !important;
-    overflow: hidden;
-    transition: border-color 0.15s;
-}
-.macro-card:hover { border-color: var(--border-strong); }
-.macro-card-header {
-    padding: 0.6rem 1rem;
-    cursor: pointer;
-    background: var(--bg-card);
-    flex-wrap: nowrap;
-    gap: 0.65rem !important;
-    align-items: center;
-    transition: background 0.12s;
-    min-height: 0 !important;
-}
-.macro-card-header:hover { background: var(--bg-hover); }
-.macro-card-body {
-    padding: 0.85rem 1rem 1rem;
-    background: var(--bg-primary);
-    gap: 0 !important;
-    width: 100%;
-}
 
-/* ── Quant cards ── */
-.quant-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.75rem 1rem;
-    margin-bottom: 0.45rem;
-    transition: border-color 0.15s;
-}
-.quant-card:hover { border-color: var(--border-strong); }
-.quant-section-container { width: 100%; }
 
 /* ── Asset view rows ── */
 .asset-row-l1 {
@@ -413,7 +374,7 @@ body.light-mode .q-select__dropdown-icon { color: var(--text-muted) !important; 
         letter-spacing: 0.04em !important;
         padding: 0 0.5rem !important;
     }
-    .macro-card-header { flex-wrap: wrap !important; }
+
 }
 """
 
