@@ -245,55 +245,6 @@ def _sheet_asset_views(wb, state: AppState):
 
 
 
-# ── Sheet 4: Quant Development ────────────────────────────────────────────────
-
-def _sheet_quant_tracker(wb, state: AppState):
-    ws = wb.create_sheet("Quant Development")
-    qt = state.quant_tracker
-
-    row = 1
-
-    # Projects
-    _section_title(ws, row, "ACTIVE RESEARCH PROJECTS", 5)
-    row += 1
-    _write_headers(ws, row, ["Project", "Current Status", "Next Step", "Priority", "Last Touched"])
-    ws.freeze_panes = f"A{row + 1}"
-    row += 1
-    for i, p in enumerate(qt.projects):
-        _write_row(ws, row, [p.name, p.status, p.next_step, p.priority, _fmt_dt(p.last_touched)],
-                   alt=bool(i % 2))
-        row += 1
-
-    row += 1
-
-    # Skills
-    _section_title(ws, row, "TECHNICAL SKILLS INVENTORY", 5)
-    row += 1
-    _write_headers(ws, row, ["Skill / Method", "Level", "Building / Practicing",
-                              "Interview Relevance", "Last Touched"])
-    row += 1
-    for i, s in enumerate(qt.skills):
-        _write_row(ws, row, [s.name, s.level, s.building, s.interview_relevance, _fmt_dt(s.last_touched)],
-                   alt=bool(i % 2))
-        row += 1
-
-    row += 1
-
-    # Readiness
-    _section_title(ws, row, "INTERVIEW READINESS", 5)
-    row += 1
-    _write_headers(ws, row, ["Topic Area", "Strength / Gap", "Evidence",
-                              "Action This Week", "Last Touched"])
-    row += 1
-    for i, r_item in enumerate(qt.readiness):
-        _write_row(ws, row, [r_item.area, r_item.strength, r_item.evidence,
-                              r_item.action, _fmt_dt(r_item.last_touched)],
-                   alt=bool(i % 2))
-        row += 1
-
-    _set_col_widths(ws, [26, 15, 40, 20, 14])
-
-
 def _write_row(ws, row: int, values: list, alt: bool = False):
     fill = _cream_fill() if alt else _white_fill()
     for col, v in enumerate(values, start=1):
@@ -351,7 +302,6 @@ def generate_excel(state: AppState) -> Path:
 
     _sheet_macro_views(wb, state)
     _sheet_asset_views(wb, state)
-    _sheet_quant_tracker(wb, state)
     _sheet_reconciliation(wb, state)
 
     date_str = datetime.now().strftime("%Y-%m-%d")

@@ -1,7 +1,16 @@
 """FRED economic data panel — pure inline-style HTML tables with click-to-chart."""
 
+from datetime import datetime
 from nicegui import ui
 from storage.fred_client import Indicator, GROUPS
+
+
+def _fmt_as_of(date_str: str) -> str:
+    """Format YYYY-MM-DD as 'Mon YYYY' for display (e.g. 'Mar 2025')."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%b %Y")
+    except Exception:
+        return date_str
 
 # ── Hardcoded dark-theme palette (no CSS variables — guaranteed to render) ────
 _BG      = "#17171e"
@@ -161,11 +170,19 @@ def _row(ind: Indicator, last: bool = False) -> str:
         f'<tr data-fred-id="{ind.id}" style="cursor:pointer">'
         if clickable else '<tr>'
     )
+    _td_name_base = (
+        f"text-align:left;padding:0.35rem 1.5rem 0.35rem 0;"
+        f"{style_override};white-space:nowrap;font-family:{_MONO};"
+    )
     if ind.error:
+        name_cell = (
+            f'<td style="{_td_name_base}">'
+            f'<span style="color:{_FAINT};font-size:0.83rem;">{ind.name}</span>'
+            f'</td>'
+        )
         return (
             f'{tr_open}'
-            f'<td style="text-align:left;padding:0.38rem 1.5rem 0.38rem 0;color:{_FAINT};'
-            f'{style_override};white-space:nowrap;font-family:{_MONO};font-size:0.83rem;">{ind.name}</td>'
+            f'{name_cell}'
             f'<td style="text-align:right;padding:0.38rem 0 0.38rem 1rem;color:{_FAINT};'
             f'{style_override};font-family:{_MONO};font-size:0.83rem;font-style:italic;">N/A</td>'
             f'<td style="text-align:right;padding:0.38rem 0 0.38rem 1rem;color:{_FAINT};'
@@ -176,10 +193,16 @@ def _row(ind: Indicator, last: bool = False) -> str:
             f'{style_override};font-family:{_MONO};font-size:0.83rem;">—</td>'
             f'</tr>'
         )
+    name_cell = (
+        f'<td style="{_td_name_base}">'
+        f'<span style="color:{_TEXT};font-size:0.83rem;">{ind.name}</span>'
+        f'<span style="display:block;color:{_FAINT};font-size:0.62rem;'
+        f'margin-top:0.06rem;letter-spacing:0.04em;">{_fmt_as_of(ind.as_of)}</span>'
+        f'</td>'
+    )
     return (
         f'{tr_open}'
-        f'<td style="text-align:left;padding:0.38rem 1.5rem 0.38rem 0;color:{_TEXT};'
-        f'{style_override};white-space:nowrap;font-family:{_MONO};font-size:0.83rem;">{ind.name}</td>'
+        f'{name_cell}'
         f'<td style="text-align:right;padding:0.38rem 0 0.38rem 1rem;color:{_TEXT};font-weight:600;'
         f'{style_override};white-space:nowrap;font-family:{_MONO};font-size:0.83rem;">{ind.value_label}</td>'
         f'<td style="text-align:right;padding:0.38rem 0 0.38rem 1rem;color:{ind.d3m_color};'

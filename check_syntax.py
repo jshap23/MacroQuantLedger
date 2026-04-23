@@ -2,7 +2,6 @@ import ast
 files = [
     'app.py',
     'components/macro_views.py',
-    'components/quant_tracker.py',
     'components/reconciliation.py',
     'components/status_bar.py',
     'models/schema.py',

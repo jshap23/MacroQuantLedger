@@ -28,39 +28,6 @@ class AssetView(BaseModel):
     last_touched: Optional[datetime] = None
 
 
-class Project(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = ""
-    status: str = ""
-    next_step: str = ""
-    priority: str = "—"
-    last_touched: Optional[datetime] = None
-
-
-class Skill(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = ""
-    level: str = "—"
-    building: str = ""
-    interview_relevance: str = "—"
-    last_touched: Optional[datetime] = None
-
-
-class ReadinessItem(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    area: str = ""
-    strength: str = ""
-    evidence: str = ""
-    action: str = ""
-    last_touched: Optional[datetime] = None
-
-
-class QuantTracker(BaseModel):
-    projects: list[Project] = Field(default_factory=list)
-    skills: list[Skill] = Field(default_factory=list)
-    readiness: list[ReadinessItem] = Field(default_factory=list)
-
-
 class Reconciliation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     date: datetime = Field(default_factory=datetime.now)
@@ -77,25 +44,14 @@ class BriefingStrip(BaseModel):
     top_of_mind_touched: Optional[datetime] = None
 
 
-class ViewChangeEntry(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=None))
-    view_id: str
-    view_name: str
-    field: str          # "direction" | "conviction"
-    old_value: str
-    new_value: str
-    reason: str = ""
-
-
 class AppState(BaseModel):
     macro_views: list[MacroView] = Field(default_factory=list)
     macro_notes: str = ""
     asset_views: list[AssetView] = Field(default_factory=list)
-    quant_tracker: QuantTracker = Field(default_factory=QuantTracker)
+    quant_focus: str = ""
+    quant_focus_next: str = ""
     reconciliations: list[Reconciliation] = Field(default_factory=list)
     briefing: BriefingStrip = Field(default_factory=BriefingStrip)
-    view_change_log: list[ViewChangeEntry] = Field(default_factory=list)
 
 
 DEFAULT_MACRO_VIEWS = [
@@ -133,10 +89,7 @@ def default_state() -> AppState:
         macro_views=[v.model_copy() for v in DEFAULT_MACRO_VIEWS],
         macro_notes="",
         asset_views=[v.model_copy() for v in DEFAULT_ASSET_VIEWS],
-        quant_tracker=QuantTracker(
-            projects=[Project()],
-            skills=[Skill()],
-            readiness=[ReadinessItem()],
-        ),
+        quant_focus="",
+        quant_focus_next="",
         reconciliations=[],
     )

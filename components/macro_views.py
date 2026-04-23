@@ -117,7 +117,7 @@ def _build_row_contents(view: MacroView):
     )
 
 
-def render_macro_views(state: AppState, save_indicator, log_change=None):
+def render_macro_views(state: AppState, save_indicator):
     _inject_css()
 
     def save():
@@ -136,7 +136,7 @@ def render_macro_views(state: AppState, save_indicator, log_change=None):
     def open_drawer(view: MacroView):
         drawer_body.clear()
         with drawer_body:
-            _render_drawer(view, state, save, log_change, drawer, row_containers)
+            _render_drawer(view, state, save, drawer, row_containers)
         drawer.open()
 
     # ── Column headers ─────────────────────────────────────────────────────────
@@ -174,7 +174,6 @@ def _render_drawer(
     view: MacroView,
     state: AppState,
     save,
-    log_change,
     dialog,
     row_containers: dict,
 ):
@@ -206,7 +205,6 @@ def _render_drawer(
         ["Bullish", "Neutral", "Bearish", "No View"],
         value=view.direction,
         on_change=lambda e, v=view: (
-            log_change(v, "direction", v.direction, e.value) if log_change and v.direction != e.value else None,
             setattr(v, "direction", e.value),
             update_and_save(),
         )
@@ -218,7 +216,6 @@ def _render_drawer(
         ["High", "Medium", "Low", "—"],
         value=view.conviction,
         on_change=lambda e, v=view: (
-            log_change(v, "conviction", v.conviction, e.value) if log_change and v.conviction != e.value else None,
             setattr(v, "conviction", e.value),
             update_and_save(),
         )

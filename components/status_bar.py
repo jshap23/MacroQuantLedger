@@ -43,20 +43,6 @@ def render_status_bar(state: AppState):
     )
     stale_color = "#4ade80" if current_count == 7 else ("#fbbf24" if current_count >= 5 else "#f87171")
 
-    # QUANT TRACKER — most recently touched item
-    all_quant = (
-        list(state.quant_tracker.projects)
-        + list(state.quant_tracker.skills)
-        + list(state.quant_tracker.readiness)
-    )
-    quant_days = None
-    for item in all_quant:
-        d = days_since(item.last_touched)
-        if d is not None:
-            quant_days = d if quant_days is None else min(quant_days, d)
-    quant_color = staleness_color(quant_days)
-    quant_label = staleness_label(quant_days)
-
     # LAST RECONCILIATION
     recon_days = None
     if state.reconciliations:
@@ -70,7 +56,6 @@ def render_status_bar(state: AppState):
 
     with ui.row().classes("status-bar"):
         _indicator("VIEWS CURRENT", f"{current_count}/7", stale_color)
-        _indicator("QUANT TRACKER", quant_label, quant_color)
         _indicator("LAST RECONCILIATION", recon_label, recon_color)
 
 

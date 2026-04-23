@@ -596,9 +596,11 @@ def fetch_all_indicators() -> tuple[list, str]:
     indicators.append(ind)
 
     # ── Activity ──────────────────────────────────────────────────────────────
-    gdp_obs    = _fetch("A191RL1Q225SBEA", 40)    # Real GDP QoQ SAAR%, quarterly
-    indpro_obs = _fetch("INDPRO", 120)             # Industrial production index, monthly
-    pcec96_obs = _fetch("PCEC96", 120)             # Real PCE, monthly
+    gdp_obs      = _fetch("A191RL1Q225SBEA", 40)    # Real GDP QoQ SAAR%, quarterly
+    indpro_obs   = _fetch("INDPRO", 120)             # Industrial production index, monthly
+    pcec96_obs   = _fetch("PCEC96", 120)             # Real PCE, monthly
+    rsafs_obs    = _fetch("RSAFS", 120)              # Advance retail & food services sales, monthly SA
+    rsxfs_obs    = _fetch("RSXFS", 120)              # Advance retail trade ex food services (control), monthly SA
     ind = _gdp(gdp_obs)
     ind.chart_series = _chart_raw(gdp_obs)
     ind.chart_label = "QoQ SAAR %"
@@ -611,6 +613,16 @@ def fetch_all_indicators() -> tuple[list, str]:
 
     ind = _activity_yoy(pcec96_obs, "pcec96", "Real Consumer Spending (YoY %, Δpp)", "Activity", 1)
     ind.chart_series = _chart_yoy(pcec96_obs)
+    ind.chart_label = "YoY %"
+    indicators.append(ind)
+
+    ind = _activity_yoy(rsafs_obs, "rsafs", "Retail Sales (YoY %, Δpp)", "Activity", 1)
+    ind.chart_series = _chart_yoy(rsafs_obs)
+    ind.chart_label = "YoY %"
+    indicators.append(ind)
+
+    ind = _activity_yoy(rsxfs_obs, "rsxfs", "Retail Control (YoY %, Δpp)", "Activity", 1)
+    ind.chart_series = _chart_yoy(rsxfs_obs)
     ind.chart_label = "YoY %"
     indicators.append(ind)
 

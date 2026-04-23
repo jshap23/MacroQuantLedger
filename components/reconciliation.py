@@ -21,6 +21,24 @@ def render_reconciliation(state: AppState, save_indicator):
 
 
 def _render_content(state: AppState, save, refresh):
+    # ── Current Quant Focus ────────────────────────────────────────────────────
+    ui.label("CURRENT QUANT FOCUS").classes("section-header")
+    focus_input = ui.input(
+        value=state.quant_focus,
+        placeholder="What are you building right now?"
+    ).classes("w-full dark-input")
+    focus_input.on("blur", lambda _: (
+        setattr(state, "quant_focus", focus_input.value), save()
+    ))
+
+    next_input = ui.input(
+        value=state.quant_focus_next,
+        placeholder="Where is it headed?"
+    ).classes("w-full dark-input").style("margin-top:0.4rem; margin-bottom:1.75rem;")
+    next_input.on("blur", lambda _: (
+        setattr(state, "quant_focus_next", next_input.value), save()
+    ))
+
     form_visible = {"v": False}
     form_container = ui.element("div")
 
@@ -67,20 +85,26 @@ def _show_form(form_container, form_visible, start_btn, state: AppState, save, r
             ).classes("full-width dark-input")
 
             ui.label("TIME ALLOCATION (% of discretionary hours)").classes("field-label")
+            submit_ref = [None]
+
             with ui.row().style("gap:1rem; align-items:center; flex-wrap:wrap;"):
                 macro_pct = ui.number(label="Macro", value=33, min=0, max=100).classes("dark-input").style("width:100px;")
                 quant_pct = ui.number(label="Quant Dev", value=33, min=0, max=100).classes("dark-input").style("width:100px;")
                 other_pct = ui.number(label="Other", value=34, min=0, max=100).classes("dark-input").style("width:100px;")
-                total_label = ui.label("Total: 100%").style("color:#27ae60; font-size:0.85rem;")
+                total_label = ui.label("Total: 100% ✓").style("color:#4ade80; font-size:0.85rem;")
 
             def update_total():
                 total = int(macro_pct.value or 0) + int(quant_pct.value or 0) + int(other_pct.value or 0)
                 if total == 100:
-                    total_label.set_text("Total: 100%")
-                    total_label.style("color:#27ae60; font-size:0.85rem;")
+                    total_label.set_text("Total: 100% ✓")
+                    total_label.style("color:#4ade80; font-size:0.85rem;")
+                    if submit_ref[0]:
+                        submit_ref[0].enable()
                 else:
-                    total_label.set_text(f"Total: {total}% ⚠ must equal 100")
-                    total_label.style("color:#c0392b; font-size:0.85rem;")
+                    total_label.set_text(f"Total: {total}% — must equal 100")
+                    total_label.style("color:#f87171; font-size:0.85rem;")
+                    if submit_ref[0]:
+                        submit_ref[0].disable()
 
             macro_pct.on("update:model-value", lambda _: update_total())
             quant_pct.on("update:model-value", lambda _: update_total())
@@ -111,7 +135,8 @@ def _show_form(form_container, form_visible, start_btn, state: AppState, save, r
                 def cancel():
                     refresh()
 
-                ui.button("Submit", on_click=submit).classes("submit-btn")
+                submit_btn = ui.button("Submit", on_click=submit).classes("submit-btn")
+                submit_ref[0] = submit_btn
                 ui.button("Cancel", on_click=cancel).classes("cancel-btn")
 
 
@@ -121,7 +146,10 @@ def _history_card(rec: Reconciliation, state: AppState, save, refresh):
             date_str = rec.date.strftime("%a, %b %d") if rec.date else "—"
             ui.label(date_str).style("font-weight:700; color:#c9a84c;")
 
-            def delete(r=rec):
+            del_container = ui.element("div")
+            confirming = {"v": False}
+
+            def do_delete(r=rec):
                 try:
                     state.reconciliations.remove(r)
                 except ValueError:
@@ -129,7 +157,33 @@ def _history_card(rec: Reconciliation, state: AppState, save, refresh):
                 save()
                 refresh()
 
-            ui.button("✕", on_click=delete).classes("remove-btn")
+            def toggle_confirm():
+                confirming["v"] = not confirming["v"]
+                redraw_del()
+
+            def redraw_del():
+                del_container.clear()
+                with del_container:
+                    if confirming["v"]:
+                        with ui.row().style("align-items:center; gap:0.3rem;"):
+                            ui.label("Remove?").style(
+                                "font-size:0.7rem; color:#f87171; "
+                                "font-family:'IBM Plex Mono',monospace;"
+                            )
+                            ui.button("Yes", on_click=do_delete).style(
+                                "background:#7f1d1d;color:#fca5a5;border:none;box-shadow:none;"
+                                "font-size:0.7rem;padding:2px 8px;min-height:unset;border-radius:3px;"
+                                "font-family:'IBM Plex Mono',monospace;"
+                            )
+                            ui.button("No", on_click=toggle_confirm).style(
+                                "background:transparent;color:var(--text-muted);border:none;"
+                                "box-shadow:none;font-size:0.7rem;padding:2px 8px;min-height:unset;"
+                                "font-family:'IBM Plex Mono',monospace;"
+                            )
+                    else:
+                        ui.button("✕", on_click=toggle_confirm).classes("remove-btn")
+
+            redraw_del()
 
         if rec.synthesis:
             ui.label(rec.synthesis).style("font-style:italic; color:#aaa; margin:0.25rem 0;")

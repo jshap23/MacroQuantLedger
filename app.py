@@ -4,13 +4,11 @@ from nicegui import ui, app as ni_app
 from storage.persistence import load_state, save_state, import_state, STATE_FILE
 from components.status_bar import render_status_bar
 from components.macro_views import render_macro_views
-from components.quant_tracker import render_quant_tracker
 from components.reconciliation import render_reconciliation
 from components.asset_views import render_asset_views
 from components.briefing_strip import render_briefing_strip
-from components.view_change_log import render_view_change_log
 from components.fred_panel import render_fred_panel
-from models.schema import ViewChangeEntry
+from components.briefing import render_briefing
 from export.excel import generate_excel
 from export.obsidian import generate_obsidian_note
 
@@ -153,6 +151,9 @@ body.light-mode .saved-toast {
 .q-tab-panel {
     padding: 1.5rem 2rem !important;
     background: var(--bg-primary) !important;
+    /* NiceGUI's .nicegui-tab-panel uses align-items:flex-start, which shrink-wraps
+       width:auto children (e.g. CSS grid rows). Stretch so full-width tiles/grids work. */
+    align-items: stretch !important;
 }
 
 /* ── Section / field labels ── */
@@ -338,6 +339,39 @@ body.light-mode .saved-toast {
     color: var(--accent) !important;
     border-color: var(--accent) !important;
 }
+.menu-btn {
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    border: 1px solid var(--border) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
+    min-width: 2.2rem !important;
+    padding: 0 0.6rem !important;
+    letter-spacing: 0.15em !important;
+    font-size: 0.85rem !important;
+}
+.menu-btn:hover {
+    color: var(--accent) !important;
+    border-color: var(--accent) !important;
+}
+.overflow-menu {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-strong) !important;
+    border-radius: 6px !important;
+    min-width: 172px !important;
+}
+.overflow-menu .q-item {
+    color: var(--text-primary) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 0.78rem !important;
+    padding: 0.55rem 1rem !important;
+    min-height: unset !important;
+    letter-spacing: 0.04em !important;
+}
+.overflow-menu .q-item:hover { background: var(--bg-hover) !important; }
+.overflow-menu .q-separator { background: var(--border) !important; margin: 0.2rem 0 !important; }
+.overflow-menu .menu-item-danger .q-item__label { color: #f87171 !important; }
 
 /* ── Dialog ── */
 .q-dialog__backdrop { background: rgba(0,0,0,0.7) !important; }
@@ -438,7 +472,7 @@ def index():
             ui.label("view inventory · quant tracker · reconciliation").classes("app-subtitle")
 
         with ui.element("div").classes("header-actions"):
-            # Dark/light toggle
+            # ── Theme toggle ──────────────────────────────────────────────────
             is_dark = {"v": True}
 
             def toggle_theme():
@@ -457,33 +491,23 @@ def index():
             theme_btn = ui.button("☀", on_click=toggle_theme).classes("theme-btn")
             theme_btn.tooltip("Switch to light mode")
 
-            def do_export():
-                path = generate_excel(s)
-                ui.download(str(path))
-
-            ui.button("Export Excel", on_click=do_export).classes("export-btn")
-
+            # ── Obsidian (primary action) ─────────────────────────────────────
             def do_export_obsidian():
                 try:
                     path = generate_obsidian_note(s)
-                    ui.notify(
-                        f"Obsidian note written: {path}",
-                        type="positive",
-                        position="top",
-                    )
+                    ui.notify(f"Obsidian note written: {path}", type="positive", position="top")
                 except OSError as exc:
                     ui.notify(f"Could not write Obsidian note: {exc}", type="negative", position="top")
 
-            ui.button(
-                "Obsidian",
-                icon="edit_note",
-                on_click=do_export_obsidian,
-            ).classes("export-btn").tooltip("Export markdown to JS_Obsidian/MacroQuant")
+            ui.button("Obsidian", icon="edit_note", on_click=do_export_obsidian).classes("export-btn").tooltip("Export markdown to JS_Obsidian/MacroQuant")
+
+            # ── Overflow menu (rarely-used actions) ───────────────────────────
+            def do_export_excel():
+                path = generate_excel(s)
+                ui.download(str(path))
 
             def do_export_json():
                 ui.download(str(STATE_FILE), "macroquant_state.json")
-
-            ui.button("Export JSON", on_click=do_export_json).classes("import-btn")
 
             def do_import():
                 with ui.dialog() as dialog, ui.card().style(
@@ -496,13 +520,8 @@ def index():
                     ui.label(
                         "Upload a previously exported macroquant_state.json file. "
                         "Your current data will be replaced immediately."
-                    ).style(
-                        "color:var(--text-muted); font-size:0.8rem; margin-bottom:1.25rem; line-height:1.6;"
-                    )
-
-                    status_label = ui.label("").style(
-                        "font-size:0.78rem; color:#f87171; min-height:1.2em;"
-                    )
+                    ).style("color:var(--text-muted); font-size:0.8rem; margin-bottom:1.25rem; line-height:1.6;")
+                    status_label = ui.label("").style("font-size:0.78rem; color:#f87171; min-height:1.2em;")
 
                     def handle_upload(e):
                         global state
@@ -516,24 +535,12 @@ def index():
                         except Exception as exc:
                             status_label.set_text(f"Unexpected error: {exc}")
 
-                    ui.upload(
-                        label="Choose state.json",
-                        auto_upload=True,
-                        on_upload=handle_upload,
-                    ).props("accept=.json").style(
-                        "font-family:'IBM Plex Mono',monospace; font-size:0.8rem;"
-                    )
-
+                    ui.upload(label="Choose state.json", auto_upload=True, on_upload=handle_upload).props("accept=.json").style("font-family:'IBM Plex Mono',monospace; font-size:0.8rem;")
                     with ui.row().style("gap:0.5rem; justify-content:flex-end; margin-top:1rem;"):
                         ui.button("Cancel", on_click=dialog.close).style(
-                            "background:transparent; color:var(--text-muted); "
-                            "border:1px solid var(--border); box-shadow:none; "
-                            "font-family:'IBM Plex Mono',monospace;"
+                            "background:transparent; color:var(--text-muted); border:1px solid var(--border); box-shadow:none; font-family:'IBM Plex Mono',monospace;"
                         )
-
                 dialog.open()
-
-            ui.button("Import JSON", on_click=do_import).classes("import-btn")
 
             def do_reset():
                 with ui.dialog() as dialog, ui.card().style(
@@ -548,11 +555,8 @@ def index():
                     ).style("color:var(--text-muted); font-size:0.8rem; margin-bottom:1.25rem; line-height:1.6;")
                     with ui.row().style("gap:0.5rem; justify-content:flex-end;"):
                         ui.button("Cancel", on_click=dialog.close).style(
-                            "background:transparent; color:var(--text-muted); "
-                            "border:1px solid var(--border); box-shadow:none; "
-                            "font-family:'IBM Plex Mono',monospace;"
+                            "background:transparent; color:var(--text-muted); border:1px solid var(--border); box-shadow:none; font-family:'IBM Plex Mono',monospace;"
                         )
-
                         def confirm_reset():
                             global state
                             from models.schema import default_state
@@ -560,38 +564,29 @@ def index():
                             save_state(state)
                             dialog.close()
                             ui.navigate.reload()
-
                         ui.button("Yes, reset everything", on_click=confirm_reset).style(
                             "background:#7f1d1d; color:#fca5a5; border:1px solid #991b1b; "
                             "box-shadow:none; font-family:'IBM Plex Mono',monospace; font-weight:700;"
                         )
                 dialog.open()
 
-            ui.button("Reset Data", on_click=do_reset).classes("reset-btn")
+            with ui.button("···").classes("menu-btn"):
+                with ui.menu().classes("overflow-menu"):
+                    ui.menu_item("Export Excel", on_click=do_export_excel)
+                    ui.menu_item("Export JSON",  on_click=do_export_json)
+                    ui.menu_item("Import JSON",  on_click=do_import)
+                    ui.separator()
+                    ui.menu_item("Reset Data", on_click=do_reset).classes("menu-item-danger")
 
     # ── Status Bar ────────────────────────────────────────────────────────────
     status_container["el"] = ui.element("div").style("width:100%;")
     with status_container["el"]:
         render_status_bar(s)
 
-    # ── View change logger ─────────────────────────────────────────────────────
-    def log_change(view, field: str, old_val: str, new_val: str):
-        if old_val == new_val:
-            return
-        from datetime import datetime, timezone
-        entry = ViewChangeEntry(
-            timestamp=datetime.now(tz=timezone.utc),
-            view_id=view.id,
-            view_name=view.name,
-            field=field,
-            old_value=old_val,
-            new_value=new_val,
-        )
-        s.view_change_log.insert(0, entry)
-
     # ── Tabs ──────────────────────────────────────────────────────────────────
     # ── FRED data: load in background, update panel when ready ────────────────
     fred_ref = {"container": None}
+    briefing_ref = {"container": None}
 
     async def _load_fred():
         from nicegui import run
@@ -605,33 +600,36 @@ def index():
             c.clear()
             with c:
                 render_fred_panel(inds, ts)
+        bc = briefing_ref.get("container")
+        if bc is not None:
+            bc.clear()
+            with bc:
+                render_briefing(s, save_indicator, inds)
 
     asyncio.ensure_future(_load_fred())
 
     with ui.tabs().classes("w-full") as tabs:
-        tab_macro  = ui.tab("Macro Views")
-        tab_asset  = ui.tab("Asset Class Views")
-        tab_quant  = ui.tab("Quant Development")
-        tab_recon  = ui.tab("Weekly Reconciliation")
-        tab_log    = ui.tab("Change Log")
-        tab_fred   = ui.tab("Economic Data")
+        tab_macro    = ui.tab("Macro Views")
+        tab_asset    = ui.tab("Asset Class Views")
+        tab_briefing = ui.tab("Briefing")
+        tab_recon    = ui.tab("Weekly Reconciliation")
+        tab_fred     = ui.tab("Economic Data")
 
     with ui.tab_panels(tabs, value=tab_macro).classes("w-full"):
         with ui.tab_panel(tab_macro):
             render_briefing_strip(s, save_indicator)
-            render_macro_views(s, save_indicator, log_change=log_change)
+            render_macro_views(s, save_indicator)
 
         with ui.tab_panel(tab_asset):
             render_asset_views(s, save_indicator)
 
-        with ui.tab_panel(tab_quant):
-            render_quant_tracker(s, save_indicator)
+        with ui.tab_panel(tab_briefing):
+            with ui.element("div").style("width:100%;") as _briefing_c:
+                render_briefing(s, save_indicator, None)
+            briefing_ref["container"] = _briefing_c
 
         with ui.tab_panel(tab_recon):
             render_reconciliation(s, save_indicator)
-
-        with ui.tab_panel(tab_log):
-            render_view_change_log(s, save_indicator)
 
         with ui.tab_panel(tab_fred):
             with ui.element("div").style("width:100%;") as _fred_c:

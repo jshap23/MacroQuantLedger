@@ -112,6 +112,18 @@ def _macro_views(state: AppState) -> str:
     return "\n".join(lines)
 
 
+def _quant_focus(state: AppState) -> str:
+    if not state.quant_focus.strip() and not state.quant_focus_next.strip():
+        return ""
+    lines = ["## Current Quant Focus", ""]
+    if state.quant_focus.strip():
+        lines.append(f"**Building:** {state.quant_focus.strip()}")
+    if state.quant_focus_next.strip():
+        lines.append(f"**Headed:** {state.quant_focus_next.strip()}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _asset_views(state: AppState) -> str:
     lines = ["## Asset Class Views", ""]
 
@@ -142,25 +154,6 @@ def _asset_views(state: AppState) -> str:
     return "\n".join(lines)
 
 
-def _change_log(state: AppState) -> str:
-    recent = [e for e in state.view_change_log[:10]]
-    if not recent:
-        return ""
-
-    lines = ["## Recent View Changes", ""]
-    lines.append("| Date | View | Field | Change | Reason |")
-    lines.append("|------|------|-------|--------|--------|")
-
-    for entry in recent:
-        ts     = _fmt_dt(entry.timestamp)
-        change = f"{entry.old_value} → **{entry.new_value}**"
-        reason = _pipe_safe(entry.reason) if entry.reason else ""
-        lines.append(f"| {ts} | {entry.view_name} | {entry.field} | {change} | {reason} |")
-
-    lines.append("")
-    return "\n".join(lines)
-
-
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 def generate_obsidian_note(state: AppState) -> Path:
@@ -180,9 +173,9 @@ def generate_obsidian_note(state: AppState) -> Path:
     body_parts += [_macro_views(state), "---", ""]
     body_parts += [_asset_views(state), "---", ""]
 
-    log = _change_log(state)
-    if log:
-        body_parts.append(log)
+    qf = _quant_focus(state)
+    if qf:
+        body_parts += [qf, "---", ""]
 
     content = "\n".join(body_parts)
 
