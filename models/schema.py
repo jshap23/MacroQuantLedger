@@ -44,6 +44,16 @@ class BriefingStrip(BaseModel):
     top_of_mind_touched: Optional[datetime] = None
 
 
+class Trade(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    ticker: str
+    entry_date: str                  # YYYY-MM-DD
+    exit_date: Optional[str] = None  # YYYY-MM-DD; None = open
+    size: Optional[float] = None     # $ notional at entry
+    note: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
 class AppState(BaseModel):
     macro_views: list[MacroView] = Field(default_factory=list)
     macro_notes: str = ""
@@ -52,6 +62,7 @@ class AppState(BaseModel):
     quant_focus_next: str = ""
     reconciliations: list[Reconciliation] = Field(default_factory=list)
     briefing: BriefingStrip = Field(default_factory=BriefingStrip)
+    trades: list[Trade] = Field(default_factory=list)
 
 
 DEFAULT_MACRO_VIEWS = [

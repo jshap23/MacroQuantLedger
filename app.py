@@ -9,6 +9,7 @@ from components.asset_views import render_asset_views
 from components.briefing_strip import render_briefing_strip
 from components.fred_panel import render_fred_panel
 from components.briefing import render_briefing
+from components.trades import render_trades
 from export.excel import generate_excel
 from export.obsidian import generate_obsidian_note
 
@@ -614,6 +615,7 @@ def index():
         tab_briefing = ui.tab("Briefing")
         tab_recon    = ui.tab("Weekly Reconciliation")
         tab_fred     = ui.tab("Economic Data")
+        tab_trades   = ui.tab("Trades")
 
     with ui.tab_panels(tabs, value=tab_macro).classes("w-full"):
         with ui.tab_panel(tab_macro):
@@ -640,6 +642,9 @@ def index():
                         "letter-spacing:0.08em; font-family:'IBM Plex Mono',monospace;"
                     )
             fred_ref["container"] = _fred_c
+
+        with ui.tab_panel(tab_trades):
+            render_trades(s, save_indicator)
 
 
 ui.run(title="MacroQuant Ledger", port=8080, reload=False, host="0.0.0.0")
