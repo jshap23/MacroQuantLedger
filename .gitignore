@@ -10,6 +10,7 @@ env/
 data/state.json
 data/snapshots/*.json
 data/*.xlsx
+data/briefing_cache.json
 
 # Conda
 .conda/
