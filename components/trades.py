@@ -11,8 +11,8 @@ _DATE_FMT = "%Y-%m-%d"
 _TICKER_CLR = "#2dd4bf"
 
 # Grid column templates
-_OPEN_COLS = "85px 92px 52px 82px 82px 76px 80px 1fr 62px 34px"
-_CLOSED_COLS = "85px 92px 92px 52px 82px 82px 76px 80px 1fr 34px"
+_OPEN_COLS = "85px 92px 52px 82px 82px 68px 76px 80px 1fr 62px 34px"
+_CLOSED_COLS = "85px 92px 92px 52px 82px 82px 68px 76px 80px 1fr 34px"
 _ROW_STYLE = (
     "display:grid; align-items:center; gap:0.5rem; padding:0.42rem 0.75rem; "
     "border-bottom:1px solid var(--border);"
@@ -90,6 +90,7 @@ def render_trades(state: AppState, save_indicator):
             _add_form(state, save_fn, reload)
             _open_section(state, prices, save_fn, reload)
             _closed_section(state, prices, save_fn, reload)
+            _footnote()
 
     with container:
         if state.trades:
@@ -103,9 +104,28 @@ def render_trades(state: AppState, save_indicator):
             _add_form(state, save_fn, reload)
             _open_section(state, {}, save_fn, reload)
             _closed_section(state, {}, save_fn, reload)
+            _footnote()
 
     if state.trades:
         asyncio.ensure_future(reload())
+
+
+def _footnote():
+    with ui.element("div").style("margin-top:2rem; padding-top:1rem; border-top:1px solid var(--border);"):
+        ui.html(
+            "<span style='"
+            "font-size:0.67rem; color:var(--text-faint); "
+            "font-family:\"IBM Plex Mono\",monospace; line-height:1.7; letter-spacing:0.02em;"
+            "'>"
+            "<b>PRICE RTN</b> — raw unadjusted close (entry → current/exit). Capital gains only, no income. "
+            "This is the price you see on a chart.<br>"
+            "<b>TOTAL RTN</b> — dividend-adjusted close via yfinance (Adj Close). "
+            "Includes reinvested dividends and distributions. Bold because it's the economically correct return.<br>"
+            "<b>P&amp;L</b> — notional × total return. Only meaningful when Size $ was set at entry.<br>"
+            "<b>Carry</b> — not shown explicitly; implied as Total RTN − Price RTN. "
+            "Especially material for bond ETFs (TLT ~4%, LQD ~5%, HYG ~7% annualised yield)."
+            "</span>"
+        )
 
 
 # ── add-position form ─────────────────────────────────────────────────────────
@@ -172,18 +192,23 @@ def _open_section(state: AppState, prices: dict, save_fn, reload):
         "border-radius:6px; overflow:hidden;"
     ):
         with ui.element("div").style(f"{_HDR_STYLE} grid-template-columns:{_OPEN_COLS};"):
-            for h in ["TICKER", "ENTERED", "DAYS", "ENTRY PX", "CURR PX", "RETURN", "P&L", "NOTE", "", ""]:
+            for h in ["TICKER", "ENTERED", "DAYS", "ENTRY PX", "CURR PX", "PRICE RTN", "TOTAL RTN", "P&L", "NOTE", "", ""]:
                 _hdr(h)
         for trade in open_trades:
             _open_row(state, trade, prices, save_fn, reload)
 
 
 def _open_row(state: AppState, trade: Trade, prices: dict, save_fn, reload):
-    series = prices.get(trade.ticker.upper())
-    entry_px  = trade_prices.price_on_or_before(series, trade.entry_date) if series is not None else None
-    curr_px   = float(series.iloc[-1]) if (series is not None and not series.empty) else None
-    ret_t, ret_c = _fmt_ret(entry_px, curr_px)
-    pnl_t, pnl_c = _fmt_pnl(entry_px, curr_px, trade.size)
+    data = prices.get(trade.ticker.upper()) or {}
+    px_series  = data.get("price")
+    tot_series = data.get("total")
+    entry_raw  = trade_prices.price_on_or_before(px_series,  trade.entry_date) if px_series  is not None else None
+    curr_raw   = float(px_series.iloc[-1])  if (px_series  is not None and not px_series.empty)  else None
+    entry_adj  = trade_prices.price_on_or_before(tot_series, trade.entry_date) if tot_series is not None else None
+    curr_adj   = float(tot_series.iloc[-1]) if (tot_series is not None and not tot_series.empty) else None
+    px_ret_t,  px_ret_c  = _fmt_ret(entry_raw, curr_raw)
+    tot_ret_t, tot_ret_c = _fmt_ret(entry_adj, curr_adj)
+    pnl_t, pnl_c = _fmt_pnl(entry_adj, curr_adj, trade.size)
     note_s = (trade.note[:38] + "…") if len(trade.note) > 38 else trade.note
 
     with ui.element("div").style(f"{_ROW_STYLE} grid-template-columns:{_OPEN_COLS};"):
@@ -193,9 +218,10 @@ def _open_row(state: AppState, trade: Trade, prices: dict, save_fn, reload):
         )
         _cell(trade.entry_date, color="var(--text-muted)")
         _cell(_days_held(trade.entry_date, None), color="var(--text-muted)")
-        _cell(_fmt_px(entry_px))
-        _cell(_fmt_px(curr_px))
-        _cell(ret_t, color=ret_c, bold=True)
+        _cell(_fmt_px(entry_raw))
+        _cell(_fmt_px(curr_raw))
+        _cell(px_ret_t,  color=px_ret_c)
+        _cell(tot_ret_t, color=tot_ret_c, bold=True)
         _cell(pnl_t, color=pnl_c)
         _cell(note_s, color="var(--text-faint)")
 
@@ -242,18 +268,23 @@ def _closed_section(state: AppState, prices: dict, save_fn, reload):
         "border-radius:6px; overflow:hidden;"
     ):
         with ui.element("div").style(f"{_HDR_STYLE} grid-template-columns:{_CLOSED_COLS};"):
-            for h in ["TICKER", "ENTERED", "EXITED", "DAYS", "ENTRY PX", "EXIT PX", "RETURN", "P&L", "NOTE", ""]:
+            for h in ["TICKER", "ENTERED", "EXITED", "DAYS", "ENTRY PX", "EXIT PX", "PRICE RTN", "TOTAL RTN", "P&L", "NOTE", ""]:
                 _hdr(h)
         for trade in closed_trades:
             _closed_row(state, trade, prices, save_fn, reload)
 
 
 def _closed_row(state: AppState, trade: Trade, prices: dict, save_fn, reload):
-    series = prices.get(trade.ticker.upper())
-    entry_px = trade_prices.price_on_or_before(series, trade.entry_date) if series is not None else None
-    exit_px  = trade_prices.price_on_or_before(series, trade.exit_date)  if series is not None else None
-    ret_t, ret_c = _fmt_ret(entry_px, exit_px)
-    pnl_t, pnl_c = _fmt_pnl(entry_px, exit_px, trade.size)
+    data = prices.get(trade.ticker.upper()) or {}
+    px_series  = data.get("price")
+    tot_series = data.get("total")
+    entry_raw = trade_prices.price_on_or_before(px_series,  trade.entry_date) if px_series  is not None else None
+    exit_raw  = trade_prices.price_on_or_before(px_series,  trade.exit_date)  if px_series  is not None else None
+    entry_adj = trade_prices.price_on_or_before(tot_series, trade.entry_date) if tot_series is not None else None
+    exit_adj  = trade_prices.price_on_or_before(tot_series, trade.exit_date)  if tot_series is not None else None
+    px_ret_t,  px_ret_c  = _fmt_ret(entry_raw, exit_raw)
+    tot_ret_t, tot_ret_c = _fmt_ret(entry_adj, exit_adj)
+    pnl_t, pnl_c = _fmt_pnl(entry_adj, exit_adj, trade.size)
     note_s = (trade.note[:38] + "…") if len(trade.note) > 38 else trade.note
 
     with ui.element("div").style(f"{_ROW_STYLE} grid-template-columns:{_CLOSED_COLS};"):
@@ -264,9 +295,10 @@ def _closed_row(state: AppState, trade: Trade, prices: dict, save_fn, reload):
         _cell(trade.entry_date, color="var(--text-muted)")
         _cell(trade.exit_date,  color="var(--text-muted)")
         _cell(_days_held(trade.entry_date, trade.exit_date), color="var(--text-muted)")
-        _cell(_fmt_px(entry_px))
-        _cell(_fmt_px(exit_px))
-        _cell(ret_t, color=ret_c, bold=True)
+        _cell(_fmt_px(entry_raw))
+        _cell(_fmt_px(exit_raw))
+        _cell(px_ret_t,  color=px_ret_c)
+        _cell(tot_ret_t, color=tot_ret_c, bold=True)
         _cell(pnl_t, color=pnl_c)
         _cell(note_s, color="var(--text-faint)")
 
