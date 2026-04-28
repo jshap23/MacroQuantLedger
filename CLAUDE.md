@@ -40,13 +40,13 @@ There are no automated tests, linting, or build steps beyond the above.
 | Module | Role |
 |---|---|
 | `app.py` | Entry point, global CSS theming (dark/light), layout, 6-tab routing |
-| `config.py` | Central constants — `ANTHROPIC_POLISH_MODEL = "claude-sonnet-4-6"` |
+| `config.py` | OpenRouter defaults — base URL, default model slug, max tokens, temperature (overridable via env) |
 | `models/schema.py` | Pydantic v2 models: `AppState`, `MacroView`, `AssetView`, `Reconciliation`, `BriefingStrip`, `Trade` |
 | `storage/persistence.py` | `load_state()` / `save_state()` — JSON at `data/state.json`; daily snapshots to `data/snapshots/`; schema migration |
 | `storage/fred_client.py` | FRED API client — 50+ macro indicators with transforms; ETF data via yfinance + Finnhub (optional) |
 | `storage/trade_prices.py` | yfinance price history — returns both raw close (price return) and adj close (total return) per ticker |
 | `services/talking_points.py` | Pure synthesis — `macro_prose()`, `fred_snippet()`, `asset_verbal()` (no I/O, no UI) |
-| `services/llm_polish.py` | Anthropic Claude integration — briefing generation and polish with SHA256-keyed disk cache |
+| `services/llm_polish.py` | OpenRouter (OpenAI-compatible) chat — briefing generation and polish; disk cache keyed by base URL + model + content hash |
 | `components/status_bar.py` | Top-of-page staleness indicators (views current, last reconciliation) |
 | `components/macro_views.py` | 7 fixed macro view rows — side-drawer editor, conviction bars, direction badges |
 | `components/asset_views.py` | Asset Class Views tab — 1–5 score grid (L1 + Equities + Fixed Income) + conviction tenure table |
@@ -91,8 +91,8 @@ There are no automated tests, linting, or build steps beyond the above.
 - **Conviction tenure:** `asset_views.py` loads daily snapshots to calculate how long each asset score has been held; displayed in the tenure table.
 - **Persistence:** No database. Every edit calls `save_state()`. Load failure falls back to `default_state()`. Daily snapshots written to `data/snapshots/state_YYYY-MM-DD.json`.
 - **Container-based refresh:** Sections that change dynamically (e.g., trades, reconciliation history) use a NiceGUI container `.clear()`ed and re-rendered.
-- **LLM briefing:** `services/llm_polish.py` calls `claude-sonnet-4-6` (set in `config.py`). Results cached by SHA256 hash of context in `data/briefing_cache.json`. Cache is checked before any API call.
-- **FRED integration:** Optional — panel only renders if `FRED_API_KEY` is set. `FINNHUB_API_KEY` optional for real-time ETF quotes. `ANTHROPIC_API_KEY` optional for briefing generation.
+- **LLM briefing:** `services/llm_polish.py` calls OpenRouter’s Chat Completions API (`openai` SDK with `base_url` set to OpenRouter). Model and tuning come from `config.py` and `OPENROUTER_*` env vars. Results cached in `data/briefing_cache.json` (hash includes API base URL and model id so switching models does not reuse stale entries). Cache is checked before any API call.
+- **FRED integration:** Optional — panel only renders if `FRED_API_KEY` is set. `FINNHUB_API_KEY` optional for real-time ETF quotes. `OPENROUTER_API_KEY` optional for AI briefing generation on the Briefing tab.
 - **Schema migration:** `persistence.py` `_migrate()` handles old `state.json` gracefully — seeds missing asset views, resets invalid enum values.
 - **SPEC.md** is the authoritative specification for all features, field names, defaults, and validation rules — consult it before changing behavior.
 
@@ -102,14 +102,23 @@ There are no automated tests, linting, or build steps beyond the above.
 |---|---|---|
 | `FRED_API_KEY` | Optional | FRED macro indicator data (panel hidden if absent) |
 | `FINNHUB_API_KEY` | Optional | Real-time ETF quotes in FRED panel |
-| `ANTHROPIC_API_KEY` | Optional | LLM briefing generation in Briefing tab |
+| `OPENROUTER_API_KEY` | Optional | LLM briefing generation (OpenRouter) on Briefing tab |
+| `OPENROUTER_BASE_URL` | Optional | API base URL (default `https://openrouter.ai/api/v1`) |
+| `OPENROUTER_MODEL` | Optional | Default OpenRouter model slug for all LLM calls |
+| `OPENROUTER_BRIEFING_MODEL` | Optional | Override model for full briefing only |
+| `OPENROUTER_POLISH_MODEL` | Optional | Override model for polish only |
+| `OPENROUTER_HTTP_REFERER` | Optional | `HTTP-Referer` header for OpenRouter rankings |
+| `OPENROUTER_APP_NAME` | Optional | `X-Title` header (default `MacroQuantLedger`) |
+| `OPENROUTER_MAX_TOKENS_BRIEFING` | Optional | Max completion tokens for briefing (default from `config.py`) |
+| `OPENROUTER_MAX_TOKENS_POLISH` | Optional | Max completion tokens for polish (default from `config.py`) |
+| `OPENROUTER_TEMPERATURE` | Optional | Sampling temperature (default from `config.py`) |
 
 ### Data Directory
 
 ```
 data/
 ├── state.json              # Current app state (gitignored)
-├── briefing_cache.json     # LLM response cache keyed by context hash (gitignored)
+├── briefing_cache.json     # LLM response cache (keys include base URL + model + content hash; gitignored)
 └── snapshots/
     └── state_YYYY-MM-DD.json  # One snapshot per calendar day (gitignored)
 ```
