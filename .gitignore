@@ -11,6 +11,8 @@ data/state.json
 data/snapshots/*.json
 data/*.xlsx
 data/briefing_cache.json
+export/*.xlsx
+export/*.json
 
 # Conda
 .conda/
