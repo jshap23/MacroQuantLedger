@@ -500,7 +500,7 @@ def index():
                 except OSError as exc:
                     ui.notify(f"Could not write Obsidian note: {exc}", type="negative", position="top")
 
-            ui.button("Obsidian", icon="edit_note", on_click=do_export_obsidian).classes("export-btn").tooltip("Export markdown to JS_Obsidian/MacroQuant")
+            ui.button("Obsidian", icon="edit_note", on_click=do_export_obsidian).classes("export-btn").tooltip("Export markdown to JS_Obsidian/Areas/MacroQuant")
 
             # ── Overflow menu (rarely-used actions) ───────────────────────────
             def do_export_excel():

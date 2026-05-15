@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from models.schema import AppState
 
-VAULT_PATH = Path(r"C:\Users\jshap\JS_Obsidian\MacroQuant")
+VAULT_PATH = Path(r"C:\Users\jshap\JS_Obsidian\Areas\MacroQuant")
 
 # Macro view id → YAML frontmatter key
 _ID_TO_KEY = {
