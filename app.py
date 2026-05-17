@@ -10,8 +10,12 @@ from components.briefing_strip import render_briefing_strip
 from components.fred_panel import render_fred_panel
 from components.briefing import render_briefing
 from components.trades import render_trades
+from components.attribution import render_attribution
 from export.excel import generate_excel
 from export.obsidian import generate_obsidian_note
+
+_BULL_SVG = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M18 16c-1 2-3 3-6 3s-5-1-6-3c-1-2-1-4 0-6 1-2 2-3 3-4 0-1 1-2 2-2 1 0 2 1 2 2 0 1 1 2 2 3 1 2 1 4 0 6zM6 8l-2 2M22 8l-2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>'
+_BEAR_SVG = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="15" r="6"/></svg>'
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 CUSTOM_CSS = """
@@ -66,14 +70,59 @@ body, .q-page, .nicegui-content {
 /* ── Header ── */
 .app-header {
     background: var(--bg-primary);
-    border-bottom: 1px solid var(--border);
+    border-bottom: none;
     padding: 0.85rem 1.5rem 0.85rem 2rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1.5rem;
+    position: relative;
+}
+.app-header::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, var(--accent) 30%, var(--accent) 70%, transparent 100%);
+    opacity: 0.35;
 }
 .app-title-block { flex-shrink: 0; min-width: 0; }
+.header-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.mq-monogram {
+    display: flex;
+    align-items: baseline;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    font-size: 2rem;
+    line-height: 1;
+    letter-spacing: -0.05em;
+}
+.mq-letter {
+    display: inline-block;
+    background: linear-gradient(135deg, var(--accent) 0%, #4ade80 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.mq-m {
+    transform: translateY(-2px);
+}
+.mq-q {
+    transform: translateY(2px);
+    margin-left: -2px;
+}
+@keyframes title-glow {
+    from { text-shadow: 0 0 6px #2dd4bf00; }
+    to   { text-shadow: 0 0 14px #2dd4bf35; }
+}
+@keyframes title-glow-light {
+    from { text-shadow: 0 0 4px #0f766e00; }
+    to   { text-shadow: 0 0 10px #0f766e20; }
+}
 .app-title {
     font-size: 1.3rem;
     font-weight: 700;
@@ -81,6 +130,10 @@ body, .q-page, .nicegui-content {
     letter-spacing: 0.12em;
     font-family: 'IBM Plex Mono', monospace !important;
     white-space: nowrap;
+    animation: title-glow 3s ease-in-out infinite alternate;
+}
+body.light-mode .app-title {
+    animation-name: title-glow-light;
 }
 .app-subtitle {
     font-size: 0.68rem;
@@ -89,6 +142,34 @@ body, .q-page, .nicegui-content {
     margin-top: 2px;
     font-family: 'IBM Plex Mono', monospace !important;
     white-space: nowrap;
+}
+.header-clock {
+    font-size: 0.6rem;
+    color: var(--text-faint) !important;
+    letter-spacing: 0.06em;
+    margin-top: 1px;
+    font-family: 'IBM Plex Mono', monospace !important;
+    white-space: nowrap;
+}
+.header-clock-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+@keyframes live-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px #4ade8060; }
+    50%      { opacity: 0.4; box-shadow: 0 0 8px #4ade8020; }
+}
+.live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4ade80;
+    animation: live-pulse 2s ease-in-out infinite;
+    flex-shrink: 0;
+}
+body.light-mode .live-dot {
+    background: #16a34a;
 }
 .header-actions {
     display: flex;
@@ -115,6 +196,10 @@ body, .q-page, .nicegui-content {
 }
 
 /* ── Saved toast ── */
+@keyframes toast-in {
+    from { transform: translateX(20px); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+}
 .saved-toast {
     position: fixed;
     top: 1rem;
@@ -127,6 +212,7 @@ body, .q-page, .nicegui-content {
     border: 1px solid #4ade8044;
     z-index: 9999;
     font-family: 'IBM Plex Mono', monospace !important;
+    animation: toast-in 0.25s ease-out;
 }
 body.light-mode .saved-toast {
     background: #dcfce7;
@@ -147,6 +233,9 @@ body.light-mode .saved-toast {
     text-transform: uppercase !important;
 }
 .q-tab--active { color: var(--accent) !important; }
+.q-tab:hover:not(.q-tab--active) {
+    color: var(--text-primary) !important;
+}
 .q-tab-indicator { background: var(--accent) !important; }
 .q-tab-panels { background: var(--bg-primary) !important; }
 .q-tab-panel {
@@ -295,8 +384,13 @@ body.light-mode .saved-toast {
     padding: 0 1rem !important;
     box-shadow: none !important;
     white-space: nowrap !important;
+    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s !important;
 }
-.export-btn:hover { opacity: 0.88 !important; }
+.export-btn:hover {
+    opacity: 0.88 !important;
+    transform: translateY(-1px);
+    box-shadow: 0 3px 12px #2dd4bf25;
+}
 .import-btn {
     background: transparent !important;
     color: var(--accent) !important;
@@ -335,10 +429,12 @@ body.light-mode .saved-toast {
     box-shadow: none !important;
     min-width: 2.2rem !important;
     padding: 0 0.5rem !important;
+    transition: transform 0.15s, color 0.15s, border-color 0.15s !important;
 }
 .theme-btn:hover {
     color: var(--accent) !important;
     border-color: var(--accent) !important;
+    transform: scale(1.12);
 }
 .menu-btn {
     background: transparent !important;
@@ -397,6 +493,7 @@ body.light-mode .q-select__dropdown-icon { color: var(--text-muted) !important; 
         gap: 0.6rem;
     }
     .app-subtitle { display: none; }
+    .header-clock { display: none; }
     .header-actions { gap: 0.3rem; flex-wrap: wrap; }
     .status-bar {
         padding: 0.5rem 0.9rem;
@@ -444,7 +541,7 @@ def index():
     dark = ui.dark_mode()
     dark.enable()
     ui.add_head_html('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
-    ui.add_css(CUSTOM_CSS)
+    ui.add_head_html(f'<style id="mq-main-css">{CUSTOM_CSS}</style>')
 
     s = get_state()
 
@@ -468,9 +565,15 @@ def index():
 
     # ── Header ────────────────────────────────────────────────────────────────
     with ui.element("div").classes("app-header"):
-        with ui.element("div").classes("app-title-block"):
-            ui.label("MACROQUANT LEDGER").classes("app-title")
-            ui.label("view inventory · quant tracker · reconciliation").classes("app-subtitle")
+        with ui.element("div").classes("header-brand"):
+            with ui.element("div").classes("mq-monogram"):
+                ui.label("M").classes("mq-letter mq-m")
+                ui.label("Q").classes("mq-letter mq-q")
+            with ui.element("div").classes("app-title-block"):
+                ui.label("MACROQUANT LEDGER").classes("app-title")
+                with ui.element("div").classes("header-clock-wrap"):
+                    ui.element("span").classes("live-dot")
+                    ui.label("").classes("header-clock")
 
         with ui.element("div").classes("header-actions"):
             # ── Theme toggle ──────────────────────────────────────────────────
@@ -588,6 +691,7 @@ def index():
     # ── FRED data: load in background, update panel when ready ────────────────
     fred_ref = {"container": None}
     briefing_ref = {"container": None}
+    attribution_ref = {"container": None, "fred_data": None}
 
     async def _load_fred():
         from nicegui import run
@@ -606,6 +710,12 @@ def index():
             bc.clear()
             with bc:
                 render_briefing(s, save_indicator, inds)
+        attribution_ref["fred_data"] = inds
+        ac = attribution_ref.get("container")
+        if ac is not None:
+            ac.clear()
+            with ac:
+                render_attribution(s, inds)
 
     asyncio.ensure_future(_load_fred())
 
@@ -616,6 +726,7 @@ def index():
         tab_recon    = ui.tab("Weekly Reconciliation")
         tab_fred     = ui.tab("Economic Data")
         tab_trades   = ui.tab("Trades")
+        tab_attr     = ui.tab("Attribution")
 
     with ui.tab_panels(tabs, value=tab_macro).classes("w-full"):
         with ui.tab_panel(tab_macro):
@@ -645,6 +756,25 @@ def index():
 
         with ui.tab_panel(tab_trades):
             render_trades(s, save_indicator)
+
+        with ui.tab_panel(tab_attr):
+            with ui.element("div").style("width:100%;") as _attr_c:
+                render_attribution(s, None)
+            attribution_ref["container"] = _attr_c
+
+    # ── Live clock ──────────────────────────────────────────────────────────
+    ui.run_javascript("""
+        function updateClock() {
+            const el = document.querySelector('.header-clock');
+            if (!el) return;
+            const now = new Date();
+            const date = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            el.textContent = date + ' \\u00b7 ' + time;
+        }
+        updateClock();
+        setInterval(updateClock, 10000);
+    """)
 
 
 ui.run(title="MacroQuant Ledger", port=8080, reload=False, host="0.0.0.0")

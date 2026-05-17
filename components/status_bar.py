@@ -36,12 +36,11 @@ def staleness_label(days: int | None) -> str:
 
 
 def render_status_bar(state: AppState):
-    # VIEWS CURRENT (touched within 14 days)
-    current_count = sum(
-        1 for v in state.macro_views
-        if v.last_touched is not None and days_since(v.last_touched) <= 14
-    )
-    stale_color = "#4ade80" if current_count == 7 else ("#fbbf24" if current_count >= 5 else "#f87171")
+    # VIEWS CURRENT — 7 color-coded dots with tooltips
+    dot_data = []
+    for v in state.macro_views:
+        d = days_since(v.last_touched)
+        dot_data.append((v.name, staleness_color(d), staleness_label(d)))
 
     # LAST RECONCILIATION
     recon_days = None
@@ -55,8 +54,19 @@ def render_status_bar(state: AppState):
     recon_label = staleness_label(recon_days)
 
     with ui.row().classes("status-bar"):
-        _indicator("VIEWS CURRENT", f"{current_count}/7", stale_color)
+        _indicator_dots("VIEWS CURRENT", dot_data)
         _indicator("LAST RECONCILIATION", recon_label, recon_color)
+
+
+def _indicator_dots(label: str, dot_data: list[tuple[str, str, str]]):
+    with ui.element("div").classes("status-indicator"):
+        ui.label(label).classes("status-label")
+        with ui.row().style("gap:4px; align-items:center;"):
+            for name, color, age in dot_data:
+                ui.element("span").style(
+                    f"width:8px; height:8px; border-radius:50%; background:{color}; "
+                    f"box-shadow:0 0 4px {color}40; cursor:default;"
+                ).tooltip(f"{name} — {age}")
 
 
 def _indicator(label: str, value: str, color: str):

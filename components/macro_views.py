@@ -23,7 +23,7 @@ def _inject_css():
     if _CSS_INJECTED:
         return
     _CSS_INJECTED = True
-    ui.add_css("""
+    ui.add_head_html('''<style id="mq-macro-views-css">
         .mv-grid-header {
             display: grid;
             grid-template-columns: 88px 148px 1fr 50px 66px 18px;
@@ -62,7 +62,7 @@ def _inject_css():
         body.light-mode .mv-drawer-card {
             box-shadow: -4px 0 24px rgba(0,0,0,0.12);
         }
-    """)
+    </style>''')
 
 
 def _conviction_bars_html(conviction: str) -> str:

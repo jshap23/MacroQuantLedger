@@ -21,7 +21,7 @@ def _inject_css():
     if _CSS_INJECTED:
         return
     _CSS_INJECTED = True
-    ui.add_css("""
+    ui.add_head_html('''<style id="mq-briefing-css">
         .brief-opener {
             background: var(--bg-card);
             border: 1px solid var(--border-strong);
@@ -109,7 +109,7 @@ def _inject_css():
         .brief-gen-btn:hover {
             background: var(--accent-dim) !important;
         }
-    """)
+    </style>''')
 
 
 # ── Context builder ────────────────────────────────────────────────────────────
