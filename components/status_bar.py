@@ -35,14 +35,11 @@ def staleness_label(days: int | None) -> str:
     return f"{days}d ago"
 
 
-def render_status_bar(state: AppState):
-    # VIEWS CURRENT — 7 color-coded dots with tooltips
-    dot_data = []
-    for v in state.macro_views:
-        d = days_since(v.last_touched)
-        dot_data.append((v.name, staleness_color(d), staleness_label(d)))
+def render_status_bar(state: AppState, on_views_click=None, on_reconciliation_click=None):
+    view_ages = [(view, days_since(view.last_touched)) for view in state.macro_views]
+    current_count = sum(1 for _, age in view_ages if age is not None and age <= 28)
+    needs_review = len(view_ages) - current_count
 
-    # LAST RECONCILIATION
     recon_days = None
     if state.reconciliations:
         recon_days = days_since(state.reconciliations[0].date)
@@ -54,8 +51,19 @@ def render_status_bar(state: AppState):
     recon_label = staleness_label(recon_days)
 
     with ui.row().classes("status-bar"):
-        _indicator_dots("VIEWS CURRENT", dot_data)
-        _indicator("LAST RECONCILIATION", recon_label, recon_color)
+        _summary_action(
+            f"{current_count} current",
+            f"{needs_review} need review" if needs_review else "all views reviewed",
+            "#fbbf24" if needs_review else "#4ade80",
+            on_views_click,
+        )
+        ui.element("span").classes("status-divider")
+        _summary_action(
+            "Weekly review",
+            recon_label,
+            recon_color,
+            on_reconciliation_click,
+        )
 
 
 def _indicator_dots(label: str, dot_data: list[tuple[str, str, str]]):
@@ -73,3 +81,13 @@ def _indicator(label: str, value: str, color: str):
     with ui.element("div").classes("status-indicator"):
         ui.label(label).classes("status-label")
         ui.label(value).style(f"color: {color}; font-weight: 700; font-size: 1rem;")
+
+
+def _summary_action(label: str, value: str, color: str, on_click=None):
+    element = ui.element("button" if on_click else "div").classes("status-summary-action")
+    if on_click:
+        element.on("click", lambda _: on_click())
+    with element:
+        ui.element("span").classes("status-summary-dot").style(f"background:{color};")
+        ui.label(label).classes("status-summary-label")
+        ui.label(value).classes("status-summary-value").style(f"color:{color};")

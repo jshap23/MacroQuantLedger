@@ -83,6 +83,38 @@ def _score_dot_style(score: str) -> str:
     )
 
 
+def _score_control(av: AssetView, save, stale_lbl: list, *, compact: bool) -> None:
+    classes = "asset-score-control compact" if compact else "asset-score-control"
+    container = ui.element("div").classes(classes)
+
+    def choose(score: str):
+        av.direction = score
+        _touch_save(av, None, None, save)
+        if stale_lbl[0] is not None:
+            _refresh_staleness(stale_lbl[0], av, compact=compact)
+        render()
+
+    def render():
+        container.clear()
+        with container:
+            for score in SCORE_OPTIONS:
+                text = "–" if score == "—" else score
+                button = ui.button(
+                    text, on_click=lambda _, value=score: choose(value)
+                ).classes("asset-score-button")
+                button.tooltip("Clear score" if score == "—" else f"Set score to {score}")
+                if score == av.direction:
+                    colors = SCORE_COLORS.get(score, SCORE_COLORS["—"])
+                    button.classes(add="is-active")
+                    button.style(
+                        f"background:{colors['bg']} !important;"
+                        f"color:{colors['text']} !important;"
+                        f"border-color:{colors['text']} !important;"
+                    )
+
+    render()
+
+
 def _note_preview_input(av: AssetView, save, *, placeholder: str, font_size: str | None, stale_lbl: list | None = None):
     """Read-only note strip; click opens the full editor (no separate expand button)."""
     style = "flex:1; min-width:0; cursor:pointer;"
@@ -97,25 +129,12 @@ def _note_preview_input(av: AssetView, save, *, placeholder: str, font_size: str
 
 def _l1_row(av: AssetView, save):
     with ui.row().classes("w-full asset-row-l1").style("align-items:center; gap:0.75rem;"):
-        # Score badge (dynamic)
-        badge = ui.html(_score_badge_html(av.direction)).style("flex-shrink:0;")
-
         ui.label(av.name).style(
             "font-weight:700; font-size:0.95rem; min-width:140px; flex-shrink:0;"
         )
 
         stale_lbl = [None]
-
-        ui.select(
-            SCORE_OPTIONS,
-            value=av.direction,
-            on_change=lambda e, a=av, b=badge: (
-                setattr(a, "direction", e.value),
-                b.set_content(_score_badge_html(e.value)),
-                _touch_save(a, None, None, save),
-                _refresh_staleness(stale_lbl[0], a),
-            )
-        ).classes("dark-input").style("width:90px; flex-shrink:0;")
+        _score_control(av, save, stale_lbl, compact=False)
 
         _note_preview_input(
             av,
@@ -130,25 +149,12 @@ def _l1_row(av: AssetView, save):
 
 def _l2_row(av: AssetView, save):
     with ui.row().classes("w-full asset-row-l2").style("align-items:center; gap:0.5rem;"):
-        # Score dot (dynamic)
-        dot = ui.element("span").style(_score_dot_style(av.direction))
-
         ui.label(av.name).style(
-            "font-size:0.85rem; min-width:130px; flex-shrink:0; color:var(--text-primary);"
+            "font-size:0.85rem; min-width:110px; flex-shrink:0; color:var(--text-primary);"
         )
 
         stale_lbl = [None]
-
-        ui.select(
-            SCORE_OPTIONS,
-            value=av.direction,
-            on_change=lambda e, a=av, d=dot: (
-                setattr(a, "direction", e.value),
-                d.style(_score_dot_style(e.value)),
-                _touch_save(a, None, None, save),
-                _refresh_staleness(stale_lbl[0], a, compact=True),
-            )
-        ).classes("dark-input").style("width:80px; flex-shrink:0;")
+        _score_control(av, save, stale_lbl, compact=True)
 
         _note_preview_input(
             av,

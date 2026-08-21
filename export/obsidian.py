@@ -2,8 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from models.schema import AppState
-
-VAULT_PATH = Path(r"C:\Users\jshap\JS_Obsidian\Areas\MacroQuant")
+from storage.user_settings import obsidian_export_path
 
 # Macro view id → YAML frontmatter key
 _ID_TO_KEY = {
@@ -179,7 +178,10 @@ def generate_obsidian_note(state: AppState) -> Path:
 
     content = "\n".join(body_parts)
 
-    VAULT_PATH.mkdir(parents=True, exist_ok=True)
-    out_path = VAULT_PATH / f"{date_str}.md"
+    destination = obsidian_export_path()
+    if destination is None:
+        raise ValueError("Configure the Obsidian export folder in Settings first.")
+    destination.mkdir(parents=True, exist_ok=True)
+    out_path = destination / f"{date_str}.md"
     out_path.write_text(content, encoding="utf-8")
     return out_path
