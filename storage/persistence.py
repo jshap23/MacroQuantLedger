@@ -3,7 +3,7 @@ import json
 import shutil
 from datetime import date
 from pathlib import Path
-from models.schema import AppState, default_state, DEFAULT_ASSET_VIEWS
+from models.schema import AppState, ViewPoint, default_state, DEFAULT_ASSET_VIEWS
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 STATE_FILE = DATA_DIR / "state.json"
@@ -33,6 +33,17 @@ def _migrate(state: AppState) -> AppState:
     changed = False
     valid_directions = {"Bullish", "Neutral", "Bearish", "No View"}
     valid_convictions = {"High", "Medium", "Low", "—"}
+
+    # Views v1: older starter shells were saved with an empty points list,
+    # leaving no obvious editing surface. Seed those shells exactly once. The
+    # version marker prevents intentionally deleting all points from causing
+    # them to reappear on later launches.
+    if state.topic_views_version < 1:
+        for topic_view in state.topic_views:
+            if not topic_view.points:
+                topic_view.points = [ViewPoint(), ViewPoint(), ViewPoint()]
+        state.topic_views_version = 1
+        changed = True
 
     # Seed asset_views if missing (new field)
     if not state.asset_views:

@@ -110,6 +110,14 @@ def performance_summary() -> dict:
         "tag_total": sum(tags.values()),
         "weak_topics": weak_topics,
         "improving": improving[:5],
+        "strong_topics": [
+            topic for topic, scores in sorted(
+                topic_scores.items(),
+                key=lambda item: sum(item[1]) / len(item[1]),
+                reverse=True,
+            )
+            if scores and sum(scores) / len(scores) >= 7
+        ][:5],
         "due": sorted(due, key=lambda item: item["priority"], reverse=True)[:10],
         "review_concepts": sorted(
             review_concepts, key=lambda item: item["priority"], reverse=True
@@ -123,12 +131,20 @@ def performance_summary() -> dict:
 
 def weakness_context() -> str:
     summary = performance_summary()
+    if not summary["questions_answered"]:
+        return ""
     tags = ", ".join(f"{tag} ({count})" for tag, count in summary["tag_counts"].most_common(5)) or "none yet"
     due = "; ".join(f"{item['topic']}: {item['concept']}" for item in summary["due"][:6]) or "none yet"
     missed = "; ".join(f"{item['topic']}: {item['concept']}" for item in summary["review_concepts"][:6]) or "none yet"
     topics = ", ".join(topic for topic, _ in summary["weak_topics"].most_common(5)) or "none yet"
+    strong = ", ".join(summary["strong_topics"]) or "none established yet"
     stale = ", ".join(summary["stale_topics"]) or "none yet"
-    return f"Recurring failure tags: {tags}. Weak topics: {topics}. Previously missed concepts: {missed}. Concepts due now: {due}. Topics not practiced recently: {stale}. Generate variants; do not repeat old wording."
+    return (
+        f"Current recurring issues: {tags}. Weak topics: {topics}. "
+        f"Recently strong: {strong}. Previously missed concepts: {missed}. Concepts due: {due}. "
+        f"Areas not recently practiced: {stale}. Generate variants; do not "
+        "repeat old wording."
+    )
 
 
 def mark_review(question, score: int | None, tags: list[str], is_retry: bool) -> None:
