@@ -41,13 +41,24 @@ def render_today(state: AppState, save_indicator, navigate) -> None:
     recon_age = _reconciliation_age(state)
 
     with ui.element("section").classes("today-hero"):
-        ui.label(greeting).classes("today-eyebrow")
-        ui.label("Your research desk, at a glance.").classes("today-title")
-        ui.label(
-            "Capture the lead thought, refresh what is stale, then move into the detail only when you need it."
-        ).classes("today-copy")
+        with ui.column().style("gap:0"):
+            ui.label("TODAY").classes("today-eyebrow")
+            ui.label(greeting).classes("today-title")
+        with ui.row().classes("today-actions"):
+            ui.button(
+                "My Views", icon="account_tree",
+                on_click=lambda: navigate("views", "my_views"),
+            ).classes("submit-btn")
+            ui.button(
+                "Open morning briefing", icon="auto_awesome",
+                on_click=lambda: navigate("research", "briefing"),
+            ).classes("cancel-btn")
+            ui.button(
+                "Review attribution", icon="query_stats",
+                on_click=lambda: navigate("review", "attribution"),
+            ).classes("cancel-btn")
 
-    render_briefing_strip(state, save_indicator)
+    render_briefing_strip(state, save_indicator, compact=True)
 
     ui.label("DESK STATUS").classes("section-header").style("margin-top:0.5rem;")
     with ui.element("div").classes("today-metric-grid"):
@@ -75,13 +86,3 @@ def render_today(state: AppState, save_indicator, navigate) -> None:
             "Reconcile the research process",
             lambda: navigate("review", "weekly"),
         )
-
-    with ui.row().classes("today-actions"):
-        ui.button(
-            "Open morning briefing", icon="auto_awesome",
-            on_click=lambda: navigate("research", "briefing"),
-        ).classes("submit-btn")
-        ui.button(
-            "Review attribution", icon="query_stats",
-            on_click=lambda: navigate("review", "attribution"),
-        ).classes("cancel-btn")
