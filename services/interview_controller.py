@@ -8,27 +8,23 @@ from services.interview_llm import (
     CompletionOptions, FAILURE_TAGS, LLMProvider, default_provider,
     interview_model, parse_json_response,
 )
+from services.interview_prompts import (
+    PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
+)
 from storage.interview_store import get_session, mark_review, save_session, weakness_context
 
 
-BASE_RULES = """You are an AI interview sparring partner: a demanding professional interviewer, PM, researcher, economist, investor, or quant—not a tutor.
-Ask exactly one short question at a time (prefer under 30 words). Make the candidate do most of the talking. Never hint before an answer. Never say generic phrases such as 'Great answer', 'interesting perspective', or 'let's unpack that'. Follow up on what was actually said instead of walking mechanically through a question bank. Challenge vague claims. Ask for mechanisms behind causal claims, evidence behind empirical claims, and quantification where useful. If the candidate dodges, repeat the question more directly. If they ramble, interrupt and request a shorter answer. If they do not know, ask them to reason from first principles. Do not lecture unless explicitly requested.
-
-Valid failure tags only: ANSWER_FIRST, RAMBLE, DID_NOT_ANSWER, KNOWLEDGE_GAP, EVIDENCE_GAP, WEAK_MECHANISM, UNSUPPORTED_ASSERTION, FAILED_PUSHBACK, IMPLEMENTATION_GAP, TOO_HEDGED, OVERCONFIDENT.
-Tag meanings: ANSWER_FIRST means the candidate failed to lead with the answer; RAMBLE means needlessly long or unstructured; DID_NOT_ANSWER means the response dodged the question; KNOWLEDGE_GAP means missing required domain knowledge; EVIDENCE_GAP means an empirical claim lacks evidence; WEAK_MECHANISM means causality was asserted but not explained; UNSUPPORTED_ASSERTION means a material claim has no support; FAILED_PUSHBACK means the answer broke under challenge; IMPLEMENTATION_GAP means the candidate cannot translate the idea into concrete implementation; TOO_HEDGED means excessive qualification obscures the view; OVERCONFIDENT means certainty exceeds the evidence.
-Return JSON only. Do not put multiple questions in any question field."""
-
-
-MODE_RULES = {
-    "Discussion": "Hold an intellectually serious conversation across 2–3 substantive topics. Challenge assumptions and introduce counterarguments. Do not show scoring or coach every response.",
-    "Drill": "Ask focused interview questions. Evaluate each answer with a 1–10 score, at most two failure tags, and critique of no more than two sentences and 60 words. A score of 5 or below is materially weak. Never provide a model answer.",
-    "Simulation": "Conduct a realistic interview. Candidate-facing output must contain no scores, coaching, hints, compliments, or explanations. Follow up, challenge, change topics, and occasionally interrupt long answers.",
-    "Research Defense": "Apply hostile scrutiny to claims in the supplied research, resume, presentation, model, or thesis. Probe evidence, sample, causality, robustness, falsification, out-of-sample results, competing explanations, and implementation choices. Scrutinize volunteered claims especially aggressively.",
-}
-
-
-def _system(mode: str) -> str:
-    return f"{BASE_RULES}\n\nMODE: {mode}\n{MODE_RULES[mode]}"
+def _system(session: InterviewSession, current_session_state: str) -> str:
+    return compose_runtime_prompt(
+        preset_key=session.preset_key,
+        mode=session.mode,
+        practice_state=weakness_context(),
+        role=session.role,
+        focus_areas=session.focus_areas,
+        materials="\n\n".join(part for part in (session.materials, session.view_context) if part),
+        current_session_state=current_session_state,
+        prompt_override=session.prompt_override,
+    )
 
 
 def _question(data: dict, fallback_topic: str) -> InterviewQuestion:
@@ -52,16 +48,28 @@ def start_session(
     target_questions: int = 10,
     weakness_session: bool = False,
     model: str = "",
+    preset_key: str = "",
+    prompt_override: str = "",
+    view_ids: list[str] | None = None,
+    practice_style: str = "",
+    view_context: str = "",
     provider: LLMProvider | None = None,
 ) -> InterviewSession:
+    preset = get_preset(preset_key, mode)
     session = InterviewSession(
-        mode=mode,
+        mode=preset.mode,
+        preset_key=preset.key,
+        prompt_pack_version=PROMPT_PACK_VERSION,
+        prompt_override=prompt_override.strip(),
         topic=topic.strip() or "General professional interview",
         role=role.strip(),
         focus_areas=focus_areas.strip(),
         materials=materials.strip(),
+        view_ids=view_ids or [],
+        practice_style=practice_style.strip(),
+        view_context=view_context.strip(),
         target_questions=max(1, min(50, int(target_questions))),
-        weakness_session=weakness_session,
+        weakness_session=weakness_session or preset.key == "weaknesses",
         model=interview_model(model),
     )
     setup = {
@@ -69,9 +77,8 @@ def start_session(
         "topic": session.topic,
         "role": session.role,
         "focus_areas": session.focus_areas,
-        "materials": session.materials[:6000],
         "target_questions": session.target_questions,
-        "weakness_context": weakness_context() if weakness_session else "",
+        "preset": preset.label,
         "output_schema": {
             "question": "string", "topic": "string", "concept": "string",
             "difficulty": "optional string",
@@ -80,7 +87,10 @@ def start_session(
     }
     llm = provider or default_provider()
     raw = llm.complete(
-        [{"role": "system", "content": _system(mode)}, {"role": "user", "content": json.dumps(setup)}],
+        [
+            {"role": "system", "content": _system(session, json.dumps(setup))},
+            {"role": "user", "content": "Start the session with exactly one question using the required JSON schema."},
+        ],
         CompletionOptions(model=session.model, max_tokens=220),
     )
     data = parse_json_response(raw)
@@ -140,15 +150,26 @@ def evaluate_answer(
             "next_topic": "string", "concept": "underlying concept", "difficulty": "optional string",
             "done": "boolean",
             "postmortem": {
-                "overall_performance": "brief", "biggest_problems": "max 3",
-                "strongest_areas": "max 3", "concepts_to_repeat": "short list",
-                "root_causes": {"knowledge": "", "evidence/research": "", "reasoning": "", "communication": "", "pressure handling": ""},
+                "overall_performance": "brief overall assessment or pass likelihood",
+                "biggest_problems": "max 3; also used for Work on / Still weak / risks",
+                "strongest_areas": "max 3; also used for Strong / Improved",
+                "concepts_to_repeat": "short list; also used for Repeat / Next priority",
+                "root_causes": {
+                    "knowledge": "include questions exposing knowledge gaps when relevant",
+                    "evidence/research": "", "reasoning": "",
+                    "communication": "include questions where knowledge was present but communication failed when relevant",
+                    "pressure handling": "",
+                },
+                "trend": "improving, unchanged, or worsening when history supports it",
             },
         },
     }
     llm = provider or default_provider()
     raw = llm.complete(
-        [{"role": "system", "content": _system(session.mode)}, {"role": "user", "content": json.dumps(prompt)}],
+        [
+            {"role": "system", "content": _system(session, json.dumps(prompt))},
+            {"role": "user", "content": "Make the next interviewer move using the required JSON schema."},
+        ],
         CompletionOptions(model=session.model or interview_model(), max_tokens=650 if final_turn else 350),
     )
     data = parse_json_response(raw)
@@ -183,10 +204,12 @@ def evaluate_answer(
             strongest_areas=strings("strongest_areas"),
             concepts_to_repeat=strings("concepts_to_repeat", 6),
             root_causes=roots,
+            trend=str(raw_postmortem.get("trend") or "").strip(),
         )
         session.status = "completed"
         session.completed_at = datetime.now(timezone.utc)
         session.pending_move = {}
+        _record_view_practice(session)
     else:
         session.pending_move = {
             key: data.get(key) for key in (
@@ -196,6 +219,31 @@ def evaluate_answer(
         }
     save_session(session)
     return session, data
+
+
+def _record_view_practice(session: InterviewSession) -> None:
+    """Close the loop without ever rewriting the user's underlying View."""
+    if not session.view_ids:
+        return
+    from storage.persistence import load_state, save_state
+    state = load_state()
+    diagnostics: list[str] = []
+    if session.postmortem:
+        diagnostics = (session.postmortem.biggest_problems + session.postmortem.strongest_areas)[:3]
+    style = session.practice_style.lower()
+    for view in state.topic_views:
+        if view.id not in session.view_ids:
+            continue
+        view.practice.last_practiced = session.completed_at
+        view.practice.practice_count += 1
+        if style == "deliver":
+            view.practice.delivery_attempts += 1
+        elif style == "discuss":
+            view.practice.discussion_attempts += 1
+        elif style == "defend":
+            view.practice.defense_attempts += 1
+        view.practice.latest_diagnostic = diagnostics
+    save_state(state)
 
 
 def advance_session(session_id: str, result: dict) -> InterviewSession:
