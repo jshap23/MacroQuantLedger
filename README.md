@@ -6,6 +6,7 @@ A local personal dashboard for macro-quant research: view inventory, quant track
 
 ```bash
 pip install -r requirements.txt
+python setup_speech_runtime.py
 python app.py
 ```
 
