@@ -12,11 +12,14 @@ from components.briefing import render_briefing
 from components.trades import render_trades
 from components.attribution import render_attribution
 from components.interview_practice import render_interview_practice
+from components.topic_views import render_topic_views
 from components.today import render_today
 from export.excel import generate_excel
-from export.obsidian import generate_obsidian_note
 from storage.user_settings import obsidian_export_path, save_obsidian_export_path
 from services.interview_llm import available as interview_llm_available
+from services.interview_speech import register_interview_speech_routes
+
+register_interview_speech_routes(ni_app)
 
 _BULL_SVG = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M18 16c-1 2-3 3-6 3s-5-1-6-3c-1-2-1-4 0-6 1-2 2-3 3-4 0-1 1-2 2-2 1 0 2 1 2 2 0 1 1 2 2 3 1 2 1 4 0 6zM6 8l-2 2M22 8l-2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>'
 _BEAR_SVG = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="15" r="6"/></svg>'
@@ -405,29 +408,26 @@ body.light-mode .live-dot {
 
 /* ── Today ── */
 .today-hero {
-    width:100%; padding:1.4rem 1.5rem; margin-bottom:1.25rem;
-    border:1px solid var(--border-strong); border-radius:10px;
-    background:
-        radial-gradient(circle at 88% 20%, var(--accent-glow), transparent 34%),
-        linear-gradient(135deg, var(--bg-card), var(--bg-primary));
+    width:100%; padding:0.7rem 0; margin-bottom:0.6rem;
+    display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;
 }
 .today-eyebrow {
     color:var(--accent) !important; font-family:var(--font-data) !important;
-    font-size:0.7rem; font-weight:700; letter-spacing:0.12em; text-transform:uppercase;
+    font-size:0.62rem; font-weight:700; letter-spacing:0.12em; text-transform:uppercase;
 }
 .today-title {
-    color:var(--text-primary) !important; font-size:clamp(1.35rem,3vw,2rem);
-    font-weight:700; letter-spacing:-0.035em; margin-top:0.3rem;
+    color:var(--text-primary) !important; font-size:1rem;
+    font-weight:700; letter-spacing:-0.015em; margin-top:0.1rem;
 }
 .today-copy {
     color:var(--text-muted) !important; font-size:0.88rem; line-height:1.6;
     max-width:720px; margin-top:0.35rem;
 }
 .today-metric-grid {
-    display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0.75rem; width:100%;
+    display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0.5rem; width:100%;
 }
 .today-metric-card {
-    appearance:none; text-align:left; width:100%; min-height:128px; padding:1rem;
+    appearance:none; text-align:left; width:100%; min-height:86px; padding:0.65rem 0.75rem;
     color:var(--text-primary); background:var(--bg-card); border:1px solid var(--border);
     border-radius:8px; cursor:pointer; transition:transform .15s,border-color .15s,box-shadow .15s;
 }
@@ -437,13 +437,17 @@ body.light-mode .live-dot {
 }
 .today-metric-topline { display:flex; align-items:flex-start; justify-content:space-between; }
 .today-metric-value {
-    color:var(--text-primary) !important; font:700 1.45rem var(--font-data) !important;
+    color:var(--text-primary) !important; font:700 1.15rem var(--font-data) !important;
 }
 .today-metric-arrow { color:var(--text-faint) !important; transition:color .15s,transform .15s; }
 .today-metric-card:hover .today-metric-arrow { color:var(--accent) !important; transform:translateX(2px); }
-.today-metric-label { color:var(--text-primary) !important; font-size:0.8rem; font-weight:600; margin-top:0.55rem; }
-.today-metric-detail { color:var(--text-muted) !important; font-size:0.7rem; margin-top:0.2rem; }
-.today-actions { width:100%; gap:0.55rem; margin-top:1rem; }
+.today-metric-label { color:var(--text-primary) !important; font-size:0.72rem; font-weight:600; margin-top:0.28rem; }
+.today-metric-detail { color:var(--text-muted) !important; font-size:0.64rem; margin-top:0.1rem; }
+.today-actions { gap:0.55rem; margin:0; flex-wrap:wrap; }
+.today-top-of-mind { width:100%; display:flex; align-items:center; gap:0.65rem; padding:0.45rem 0.55rem; margin-bottom:0.45rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); }
+.today-top-of-mind-label { color:var(--accent) !important; font:700 0.6rem var(--font-data) !important; letter-spacing:0.12em; }
+.today-top-of-mind-input { flex:1; min-width:0; }
+.today-top-of-mind-input textarea { min-height:34px !important; height:34px !important; padding:0.35rem 0.5rem !important; line-height:1.25 !important; resize:none !important; }
 .export-btn {
     background: var(--accent) !important;
     color: #fff !important;
@@ -615,6 +619,8 @@ def index():
     saved_ref = {"el": None}
     status_container = {"el": None}
     navigation = {"primary": {}, "secondary": {}}
+    practice_bridge = {"open": None}
+    views_bridge = {"open": None}
 
     def navigate(section: str, destination: str | None = None):
         primary = navigation["primary"].get(section)
@@ -626,13 +632,25 @@ def index():
             if secondary is not None and target is not None:
                 secondary.set_value(target)
 
+    def practice_views(view_ids, style="Deliver"):
+        opener = practice_bridge.get("open")
+        if opener:
+            opener(view_ids, style)
+        navigate("practice")
+
+    def review_view(view_id):
+        opener = views_bridge.get("open")
+        if opener:
+            opener(view_id)
+        navigate("views", "my_views")
+
     def refresh_status():
         if status_container["el"] is not None:
             status_container["el"].clear()
             with status_container["el"]:
                 render_status_bar(
                     s,
-                    on_views_click=lambda: navigate("views", "macro"),
+                    on_views_click=lambda: navigate("views", "my_views"),
                     on_reconciliation_click=lambda: navigate("review", "weekly"),
                 )
 
@@ -675,7 +693,6 @@ def index():
             theme_btn = ui.button("☀", on_click=toggle_theme).classes("theme-btn")
             theme_btn.tooltip("Switch to light mode")
 
-            # ── Obsidian (primary action) ─────────────────────────────────────
             def open_settings():
                 with ui.dialog() as dialog, ui.card().style(
                     "background:var(--bg-card); color:var(--text-primary); "
@@ -685,7 +702,7 @@ def index():
                         "font-size:1rem; font-weight:700; color:var(--accent); margin-bottom:0.3rem;"
                     )
                     ui.label(
-                        "Obsidian exports are written directly to this folder. "
+                        "The Obsidian export folder is used for Topics/Views exports. "
                         "The setting is stored locally in data/user_settings.json."
                     ).style(
                         "color:var(--text-muted); font-size:0.78rem; line-height:1.55; margin-bottom:0.8rem;"
@@ -718,11 +735,10 @@ def index():
 
                     def save_settings():
                         try:
-                            saved_path = save_obsidian_export_path(path_input.value or "")
+                            save_obsidian_export_path(path_input.value or "")
                         except (ValueError, OSError) as exc:
                             settings_status.set_text(str(exc))
                             return
-                        obsidian_btn.tooltip(f"Export markdown to {saved_path}")
                         dialog.close()
                         ui.notify("Obsidian export folder saved", type="positive", position="top")
 
@@ -730,26 +746,6 @@ def index():
                         ui.button("Cancel", on_click=dialog.close).classes("cancel-btn")
                         ui.button("Save Settings", on_click=save_settings).classes("submit-btn")
                 dialog.open()
-
-            def do_export_obsidian():
-                if obsidian_export_path() is None:
-                    open_settings()
-                    return
-                try:
-                    path = generate_obsidian_note(s)
-                    ui.notify(f"Obsidian note written: {path}", type="positive", position="top")
-                except (OSError, ValueError) as exc:
-                    ui.notify(f"Could not write Obsidian note: {exc}", type="negative", position="top")
-
-            configured_obsidian = obsidian_export_path()
-            obsidian_tip = (
-                f"Export markdown to {configured_obsidian}"
-                if configured_obsidian else "Configure Obsidian export folder"
-            )
-            obsidian_btn = ui.button(
-                "Obsidian", icon="edit_note", on_click=do_export_obsidian
-            ).classes("export-btn")
-            obsidian_btn.tooltip(obsidian_tip)
 
             # ── Overflow menu (rarely-used actions) ───────────────────────────
             def do_export_excel():
@@ -836,7 +832,7 @@ def index():
     with status_container["el"]:
         render_status_bar(
             s,
-            on_views_click=lambda: navigate("views", "macro"),
+            on_views_click=lambda: navigate("views", "my_views"),
             on_reconciliation_click=lambda: navigate("review", "weekly"),
         )
 
@@ -849,26 +845,34 @@ def index():
     async def _load_fred():
         from nicegui import run
         from storage.fred_client import fetch_all_indicators
+
+        def refresh_if_alive(container, renderer) -> bool:
+            """Render only while the page client that owns the container exists."""
+            if container is None:
+                return True
+            try:
+                container.clear()
+                with container:
+                    renderer()
+            except RuntimeError as exc:
+                if "client this element belongs to has been deleted" in str(exc):
+                    return False
+                raise
+            return True
+
         try:
             inds, ts = await run.io_bound(fetch_all_indicators)
         except Exception as exc:
             inds, ts = [], f"Error: {exc}"
         c = fred_ref.get("container")
-        if c is not None:
-            c.clear()
-            with c:
-                render_fred_panel(inds, ts)
+        if not refresh_if_alive(c, lambda: render_fred_panel(inds, ts)):
+            return
         bc = briefing_ref.get("container")
-        if bc is not None:
-            bc.clear()
-            with bc:
-                render_briefing(s, save_indicator, inds)
+        if not refresh_if_alive(bc, lambda: render_briefing(s, save_indicator, inds)):
+            return
         attribution_ref["fred_data"] = inds
         ac = attribution_ref.get("container")
-        if ac is not None:
-            ac.clear()
-            with ac:
-                render_attribution(s, inds)
+        refresh_if_alive(ac, lambda: render_attribution(s, inds))
 
     asyncio.ensure_future(_load_fred())
 
@@ -894,16 +898,20 @@ def index():
 
         with ui.tab_panel(tab_views):
             with ui.tabs().props('align="left"').classes("secondary-tabs w-full") as views_tabs:
+                view_topics = ui.tab("My Views")
                 view_macro = ui.tab("Macro")
                 view_assets = ui.tab("Assets")
                 view_trades = ui.tab("Trades")
             navigation["secondary"]["views"] = views_tabs
             navigation["secondary"].update({
+                "my_views": view_topics,
                 "macro": view_macro,
                 "assets": view_assets,
                 "trades": view_trades,
             })
-            with ui.tab_panels(views_tabs, value=view_macro).classes("secondary-panels w-full"):
+            with ui.tab_panels(views_tabs, value=view_topics).classes("secondary-panels w-full"):
+                with ui.tab_panel(view_topics):
+                    render_topic_views(s, save_indicator, practice_views, views_bridge)
                 with ui.tab_panel(view_macro):
                     render_macro_views(s, save_indicator)
                 with ui.tab_panel(view_assets):
@@ -953,7 +961,7 @@ def index():
                     attribution_ref["container"] = _attr_c
 
         with ui.tab_panel(tab_interview):
-            render_interview_practice()
+            render_interview_practice(s, practice_bridge, review_view)
 
     # ── Live clock ──────────────────────────────────────────────────────────
     ui.run_javascript("""
