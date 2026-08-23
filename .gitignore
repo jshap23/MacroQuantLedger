@@ -13,6 +13,8 @@ data/*.xlsx
 data/briefing_cache.json
 data/interview_history.json
 data/user_settings.json
+data/models/
+data/speech_runtime/
 export/*.xlsx
 export/*.json
 
@@ -29,3 +31,6 @@ export/*.json
 # OS
 .DS_Store
 Thumbs.db
+
+# OpenCode agent state
+.omo/
