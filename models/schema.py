@@ -1,6 +1,6 @@
 from __future__ import annotations
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 import uuid
 
@@ -54,6 +54,58 @@ class Trade(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ViewFact(BaseModel):
+    """One concise piece of evidence supporting a point."""
+    id: str = Field(default_factory=_uuid)
+    text: str = ""
+    source: str = ""
+    as_of: str = ""
+    note: str = ""
+
+
+class ViewPoint(BaseModel):
+    """An ordered pillar in a user's spoken view."""
+    id: str = Field(default_factory=_uuid)
+    title: str = ""
+    facts: list[ViewFact] = Field(default_factory=list)
+
+
+class ViewPracticeMeta(BaseModel):
+    last_practiced: Optional[datetime] = None
+    practice_count: int = 0
+    delivery_attempts: int = 0
+    discussion_attempts: int = 0
+    defense_attempts: int = 0
+    latest_diagnostic: list[str] = Field(default_factory=list)
+
+
+class TopicView(BaseModel):
+    """Structured mental framework; deliberately not an opaque note blob."""
+    id: str = Field(default_factory=_uuid)
+    name: str = "Untitled View"
+    bottom_line: str = ""
+    points: list[ViewPoint] = Field(
+        default_factory=lambda: [ViewPoint(), ViewPoint(), ViewPoint()]
+    )
+    counterargument: str = ""
+    changes_my_mind: str = ""
+    status: Literal["Developing", "Ready", "Needs Refresh"] = "Developing"
+    priority: Literal["Core", "Normal", "Low Priority"] = "Normal"
+    archived: bool = False
+    related_view_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=_now_utc)
+    updated_at: datetime = Field(default_factory=_now_utc)
+    practice: ViewPracticeMeta = Field(default_factory=ViewPracticeMeta)
+
+
 class AppState(BaseModel):
     macro_views: list[MacroView] = Field(default_factory=list)
     macro_notes: str = ""
@@ -63,6 +115,8 @@ class AppState(BaseModel):
     reconciliations: list[Reconciliation] = Field(default_factory=list)
     briefing: BriefingStrip = Field(default_factory=BriefingStrip)
     trades: list[Trade] = Field(default_factory=list)
+    topic_views: list[TopicView] = Field(default_factory=list)
+    topic_views_version: int = 0
 
 
 DEFAULT_MACRO_VIEWS = [
@@ -103,4 +157,5 @@ def default_state() -> AppState:
         quant_focus="",
         quant_focus_next="",
         reconciliations=[],
+        topic_views_version=1,
     )

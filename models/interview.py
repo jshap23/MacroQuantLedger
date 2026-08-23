@@ -46,6 +46,7 @@ class InterviewPostmortem(BaseModel):
     strongest_areas: list[str] = Field(default_factory=list)
     concepts_to_repeat: list[str] = Field(default_factory=list)
     root_causes: dict[str, str] = Field(default_factory=dict)
+    trend: str = ""
 
 
 class InterviewSession(BaseModel):
@@ -53,10 +54,16 @@ class InterviewSession(BaseModel):
     started_at: datetime = Field(default_factory=_now)
     completed_at: Optional[datetime] = None
     mode: InterviewMode
+    preset_key: str = ""
+    prompt_pack_version: str = ""
+    prompt_override: str = ""
     topic: str
     role: str = ""
     focus_areas: str = ""
     materials: str = ""
+    view_ids: list[str] = Field(default_factory=list)
+    practice_style: str = ""
+    view_context: str = ""
     target_questions: int = 10
     weakness_session: bool = False
     model: str = ""
