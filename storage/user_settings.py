@@ -31,6 +31,15 @@ def obsidian_export_path() -> Path | None:
     return Path(raw).expanduser() if raw else None
 
 
+def obsidian_views_folder() -> Path | None:
+    raw = (
+        (os.environ.get("OBSIDIAN_VIEWS_FOLDER") or "").strip()
+        or str(load_user_settings().get("obsidian_views_folder") or "").strip()
+        or app_config.OBSIDIAN_VIEWS_FOLDER_DEFAULT.strip()
+    )
+    return Path(raw).expanduser() if raw else None
+
+
 def save_obsidian_export_path(value: str) -> Path:
     cleaned = value.strip().strip('"')
     if not cleaned:
@@ -41,6 +50,23 @@ def save_obsidian_export_path(value: str) -> Path:
     with _LOCK:
         settings = load_user_settings()
         settings["obsidian_export_path"] = str(path)
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp = SETTINGS_FILE.with_suffix(".tmp")
+        temp.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        temp.replace(SETTINGS_FILE)
+    return path
+
+
+def save_obsidian_views_folder(value: str) -> Path:
+    cleaned = value.strip().strip('"')
+    if not cleaned:
+        raise ValueError("Enter the absolute Obsidian Views folder.")
+    path = Path(cleaned).expanduser()
+    if not path.is_absolute():
+        raise ValueError("Use an absolute path, for example C:\\Obsidian\\Vault\\Views.")
+    with _LOCK:
+        settings = load_user_settings()
+        settings["obsidian_views_folder"] = str(path)
         SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         temp = SETTINGS_FILE.with_suffix(".tmp")
         temp.write_text(json.dumps(settings, indent=2), encoding="utf-8")
