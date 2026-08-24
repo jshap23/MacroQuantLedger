@@ -1,4 +1,4 @@
-"""Optional LLM polish and briefing generation via OpenRouter.
+"""Optional LLM polish for TopicViews via OpenRouter.
 
 Requires OPENROUTER_API_KEY. Base URL, models, token limits, and temperature are
 set in config.py and overridden by environment variables (documented in CLAUDE.md).
@@ -24,17 +24,6 @@ _SYSTEM = (
     "Write one paragraph of 3–5 sentences. No bullet points. No preamble or meta-commentary."
 )
 
-_BRIEFING_SYSTEM = (
-    "You are a senior macro-quant strategist writing a spoken morning briefing for an investment committee. "
-    "Using the structured view data provided, write a coherent, meeting-ready briefing in flowing prose. "
-    "Requirements: first person and direct; 4–6 paragraphs of 2–4 sentences each; open with a one-paragraph "
-    "macro overview that captures the dominant theme; weave the individual views together naturally rather "
-    "than enumerating them one by one; incorporate supporting data where it strengthens the narrative; "
-    "close with one paragraph on asset posture implications. "
-    "No bullet points. No headers. No preamble or meta-commentary. "
-    "Spoken style — this will be read aloud in a meeting."
-)
-
 
 def _strip_env(name: str) -> str:
     return (os.environ.get(name) or "").strip()
@@ -51,14 +40,6 @@ def _base_url() -> str:
 def _model_polish() -> str:
     return (
         _strip_env("OPENROUTER_POLISH_MODEL")
-        or _strip_env("OPENROUTER_MODEL")
-        or app_config.OPENROUTER_MODEL_DEFAULT
-    )
-
-
-def _model_briefing() -> str:
-    return (
-        _strip_env("OPENROUTER_BRIEFING_MODEL")
         or _strip_env("OPENROUTER_MODEL")
         or app_config.OPENROUTER_MODEL_DEFAULT
     )
@@ -86,10 +67,6 @@ def _env_float(name: str, default: float) -> float:
 
 def _max_tokens_polish() -> int:
     return _env_int("OPENROUTER_MAX_TOKENS_POLISH", app_config.OPENROUTER_MAX_TOKENS_POLISH)
-
-
-def _max_tokens_briefing() -> int:
-    return _env_int("OPENROUTER_MAX_TOKENS_BRIEFING", app_config.OPENROUTER_MAX_TOKENS_BRIEFING)
 
 
 def _temperature() -> float:
@@ -224,29 +201,3 @@ def get_cached(text: str) -> str | None:
     return _load_cache().get(k)
 
 
-def generate_briefing(context: str, force: bool = False) -> tuple[str | None, str | None]:
-    """Generate a full meeting briefing from all macro + asset context. Synchronous — use run.io_bound."""
-    if not _openrouter_api_key():
-        return None, "OPENROUTER_API_KEY is not set."
-    base = _base_url()
-    model = _model_briefing()
-    cache = _load_cache()
-    k = "full_" + _cache_digest(base, model, context)
-    if not force and k in cache:
-        return cache[k], None
-    result, err = _chat(model, _BRIEFING_SYSTEM, context, _max_tokens_briefing())
-    if err or not result:
-        return None, err or "Unknown error"
-    cache[k] = result
-    _write_cache(cache)
-    return result, None
-
-
-def get_cached_briefing(context: str) -> str | None:
-    """Return cached full briefing for this context hash, or None."""
-    if not _openrouter_api_key():
-        return None
-    base = _base_url()
-    model = _model_briefing()
-    k = "full_" + _cache_digest(base, model, context)
-    return _load_cache().get(k)

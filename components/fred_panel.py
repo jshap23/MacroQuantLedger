@@ -145,8 +145,8 @@ def _open_chart_dialog(ind: Indicator) -> None:
 
 def _th_left(text: str) -> str:
     return (
-        f'<td style="text-align:left;padding:0.22rem 1.2rem 0.22rem 0;'
-        f'font-size:0.6rem;color:{_FAINT};letter-spacing:0.12em;font-weight:400;'
+        f'<td style="text-align:left;padding:0.28rem 1.2rem 0.28rem 0.35rem;'
+        f'font-size:0.65rem;color:{_MUTED};letter-spacing:0.1em;font-weight:600;'
         f'border-bottom:1px solid {_BORDER};white-space:nowrap;'
         f'font-family:{_MONO};">{text}</td>'
     )
@@ -154,8 +154,8 @@ def _th_left(text: str) -> str:
 
 def _th(text: str) -> str:
     return (
-        f'<td style="text-align:right;padding:0.22rem 0 0.22rem 1rem;'
-        f'font-size:0.6rem;color:{_FAINT};letter-spacing:0.12em;font-weight:400;'
+        f'<td style="text-align:right;padding:0.28rem 0.35rem 0.28rem 1rem;'
+        f'font-size:0.65rem;color:{_MUTED};letter-spacing:0.1em;font-weight:600;'
         f'border-bottom:1px solid {_BORDER};white-space:nowrap;'
         f'font-family:{_MONO};">{text}</td>'
     )
@@ -223,7 +223,7 @@ def _group_table(group_name: str, inds: list[Indicator]) -> str:
         f'border-radius:6px;padding:0.5rem 0.85rem 0.6rem;margin-bottom:1.25rem;">'
         f'<table style="width:100%;border-collapse:collapse;">'
         f'<tbody>'
-        f'<tr>'
+        f'<tr style="background:{_SEP};">'
         f'{_th_left("INDICATOR")}'
         f'{_th("CURRENT")}'
         f'{_th(h[0])}'

@@ -62,40 +62,102 @@ def _inject_css():
         return
     _CSS_INJECTED = True
     ui.add_head_html('''<style id="mq-macro-views-css">
-        .mv-grid-header {
-            display: grid;
-            grid-template-columns: 96px minmax(140px, 180px) minmax(220px, 1fr) 62px 72px 18px;
-            gap: 0 0.7rem;
-            padding: 0 0.75rem 0.35rem;
-            align-items: center;
-        }
-        .mv-grid-row {
-            display: grid;
-            grid-template-columns: 96px minmax(140px, 180px) minmax(220px, 1fr) 62px 72px 18px;
-            gap: 0 0.7rem;
-            padding: 0.5rem 0.75rem;
-            align-items: center;
+        .mv-card {
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 6px;
-            cursor: pointer;
-            transition: border-color 0.12s, background 0.12s;
-            min-height: 58px;
+            border-left: 3px solid var(--border);
+            border-radius: 8px;
+            padding: 0.9rem 1.1rem 0.85rem;
+            transition: border-color 0.15s, background 0.15s;
         }
-        .mv-grid-row:hover {
+        .mv-card:hover {
             border-color: var(--border-strong);
             background: var(--bg-hover);
         }
+        .mv-card-header {
+            display: flex; align-items: center; gap: 0.55rem;
+        }
+        .mv-card-num {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.66rem; font-weight: 700;
+            color: var(--text-faint); letter-spacing: 0.06em;
+            flex-shrink: 0; line-height: 1; min-width: 1.3rem;
+        }
+        .mv-card-name {
+            font-weight: 700; font-size: 1.02rem; color: var(--text-primary);
+            letter-spacing: -0.005em; line-height: 1.25;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            flex: 1; min-width: 0;
+        }
+        .mv-card-staleness {
+            font-size: 0.66rem; white-space: nowrap; flex-shrink: 0;
+            font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+        }
+        .mv-details-btn {
+            background: transparent !important; color: var(--text-muted) !important;
+            border: 1px solid var(--border) !important; border-radius: 5px !important;
+            box-shadow: none !important; font-family: var(--font-ui) !important;
+            font-size: 0.66rem !important; font-weight: 600 !important;
+            padding: 0.18rem 0.55rem !important; min-height: unset !important;
+            text-transform: none !important; flex-shrink: 0; cursor: pointer;
+            transition: border-color 0.12s, color 0.12s;
+        }
+        .mv-details-btn:hover {
+            border-color: var(--accent) !important; color: var(--accent) !important;
+        }
+        .mv-thesis-line {
+            font-size: 0.82rem; color: var(--text-muted);
+            padding: 0.4rem 0 0.4rem 0.05rem;
+            cursor: pointer; overflow: hidden;
+            display: flex; align-items: center; gap: 0.4rem; min-height: 1.7rem;
+            transition: color 0.12s;
+        }
+        .mv-thesis-line:hover { color: var(--text-primary); }
+        .mv-thesis-text {
+            flex: 1; min-width: 0; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        .mv-thesis-empty { color: var(--accent); opacity: 0.75; }
+        .mv-thesis-edit-tag {
+            font-size: 0.56rem; color: var(--text-faint); letter-spacing: 0.1em;
+            font-weight: 700; flex-shrink: 0;
+            font-family: 'IBM Plex Mono', monospace;
+            transition: color 0.12s;
+        }
+        .mv-thesis-line:hover .mv-thesis-edit-tag { color: var(--accent); }
+        .mv-chip-row {
+            display: flex; align-items: center; gap: 0.3rem;
+            flex-wrap: wrap; margin-top: 0.35rem;
+        }
+        .mv-chip-row + .mv-chip-row { margin-top: 0.3rem; }
+        .mv-chip-label {
+            font-size: 0.55rem; font-weight: 700; color: var(--text-faint);
+            letter-spacing: 0.14em; font-family: 'IBM Plex Mono', monospace;
+            margin-right: 0.1rem; flex-shrink: 0; min-width: 4.6rem;
+        }
+        .mv-chip {
+            padding: 0.16rem 0.6rem !important; border-radius: 999px !important;
+            font-size: 0.68rem !important; font-weight: 600 !important;
+            font-family: var(--font-ui) !important;
+            background: transparent !important; color: var(--text-faint) !important;
+            border: 1px solid var(--border) !important; box-shadow: none !important;
+            cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s;
+            white-space: nowrap; user-select: none; text-transform: none !important;
+            min-height: unset !important; line-height: 1.4;
+        }
+        .mv-chip:hover {
+            border-color: var(--border-strong) !important;
+            color: var(--text-muted) !important;
+        }
+        .mv-chip.is-active {
+            color: var(--accent) !important; border-color: var(--accent) !important;
+            background: var(--accent-glow) !important;
+        }
         .mv-drawer-card {
-            width: min(460px, 95vw);
-            height: 100vh;
-            background: var(--bg-card);
-            color: var(--text-primary);
+            width: min(460px, 95vw); height: 100vh;
+            background: var(--bg-card); color: var(--text-primary);
             border-left: 1px solid var(--border-strong);
-            border-radius: 0;
-            padding: 0;
-            margin: 0;
-            overflow-y: auto;
+            border-radius: 0; padding: 0; margin: 0; overflow-y: auto;
             box-shadow: -4px 0 24px rgba(0,0,0,0.35);
         }
         body.light-mode .mv-drawer-card {
@@ -114,47 +176,10 @@ def _inject_css():
             overflow:hidden; margin-top:0.35rem;
         }
         .mv-progress-fill { height:100%; background:var(--accent); border-radius:999px; }
-        .mv-empty-lean { color:var(--accent) !important; opacity:0.8; }
-        .mv-choice-grid {
-            display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0.4rem; width:100%;
-        }
-        .mv-choice-button {
-            min-height:38px !important; padding:0.35rem 0.45rem !important;
-            background:var(--bg-input) !important; color:var(--text-muted) !important;
-            border:1px solid var(--border) !important; border-radius:6px !important;
-            box-shadow:none !important; font-family:var(--font-ui) !important;
-            font-size:0.74rem !important; font-weight:600 !important;
-            text-transform:none !important;
-        }
-        .mv-choice-button:hover { border-color:var(--accent) !important; color:var(--text-primary) !important; }
-        .mv-choice-button.is-active {
-            color:var(--accent) !important; border-color:var(--accent) !important;
-            background:var(--accent-glow) !important;
-        }
-        @media (max-width: 820px) {
-            .mv-grid-header { display:none; }
-            .mv-grid-row {
-                grid-template-columns:minmax(0,1fr) auto;
-                grid-template-areas:
-                    "name direction"
-                    "lean lean"
-                    "conviction updated";
-                row-gap:0.4rem; column-gap:0.75rem; padding:0.75rem 0.85rem;
-            }
-            .mv-direction { grid-area:direction; }
-            .mv-name { grid-area:name; }
-            .mv-lean { grid-area:lean; }
-            .mv-conviction { grid-area:conviction; }
-            .mv-updated { grid-area:updated; justify-self:end; }
-            .mv-conviction::before {
-                content:'CONVICTION'; color:var(--text-faint); font-size:0.55rem;
-                letter-spacing:0.1em; margin-right:0.55rem; vertical-align:middle;
-            }
-            .mv-updated::before {
-                content:'UPDATED  '; color:var(--text-faint); font-size:0.55rem;
-                letter-spacing:0.1em;
-            }
-            .mv-arrow { display:none !important; }
+        @media (max-width: 640px) {
+            .mv-card { padding: 0.75rem 0.85rem 0.7rem; }
+            .mv-card-name { font-size: 0.95rem; }
+            .mv-chip-label { display: none; }
             .mv-summary { align-items:flex-start; flex-direction:column; }
             .mv-progress-track { width:min(280px,75vw); }
         }
@@ -162,6 +187,7 @@ def _inject_css():
 
 
 def _conviction_bars_html(conviction: str) -> str:
+    """Render conviction bars as inline HTML. Preserved for backward compatibility."""
     filled = CONVICTION_BARS.get(conviction, 0)
     on_color = "#2dd4bf"
     off_color = "#2a2a3e"
@@ -177,67 +203,209 @@ def _conviction_bars_html(conviction: str) -> str:
     return f'<span style="display:inline-flex;align-items:flex-end;">{bars}</span>'
 
 
-def _choice_control(options: list[str], current_value, on_select) -> None:
-    container = ui.element("div").classes("mv-choice-grid")
+# ── Card section builders ──────────────────────────────────────────────
 
-    def choose(value: str):
-        on_select(value)
-        render()
-
-    def render():
-        container.clear()
-        with container:
-            for option in options:
-                button = ui.button(option, on_click=lambda _, value=option: choose(value)).classes(
-                    "mv-choice-button"
-                )
-                if option == current_value():
-                    button.classes(add="is-active")
-
-    render()
-
-
-def _build_row_contents(view: MacroView):
-    dc = DIRECTION_COLORS.get(view.direction, DIRECTION_COLORS["No View"])
+def _build_card_header(view: MacroView, index: int, open_drawer_fn):
     d = days_since(view.last_touched)
     s_label = "not set" if d is None else ("today" if d == 0 else f"{d}d ago")
     s_color = staleness_color(d)
 
-    direction_label = "SET VIEW" if view.direction == "No View" else view.direction
-    ui.element("span").classes("mv-direction").style(
-        f"background:{dc['bg']};color:{dc['text']};padding:2px 7px;border-radius:4px;"
-        f"font-size:0.67rem;font-weight:700;letter-spacing:0.05em;"
-        f"border:1px solid {dc['text']}33;white-space:nowrap;text-align:center;"
-    ).text = direction_label
+    ui.label(f"{index:02d}").classes("mv-card-num")
+    ui.label(view.name).classes("mv-card-name")
+    ui.label(s_label).classes("mv-card-staleness").style(f"color:{s_color};")
+    ui.button("Details", on_click=lambda _, v=view: open_drawer_fn(v)).classes("mv-details-btn")
 
-    ui.label(view.name).classes("mv-name").style(
-        "font-weight:600;font-size:0.85rem;white-space:nowrap;"
-        "overflow:hidden;text-overflow:ellipsis;"
-    )
 
+def _build_thesis_summary(view: MacroView, on_edit):
+    line = ui.element("div").classes("mv-thesis-line")
     if view.lean:
-        ui.label(view.lean).classes("mv-lean").style(
-            "font-style:italic;color:var(--text-muted);font-size:0.78rem;"
-            "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-        )
+        ui.label(view.lean).classes("mv-thesis-text")
     else:
         prompt = STARTER_GUIDANCE.get(view.id, {}).get("lean", "Add your thesis")
-        ui.label(f"{prompt} →").classes("mv-lean mv-empty-lean").style("font-size:0.76rem;")
+        line.classes(add="mv-thesis-empty")
+        ui.label(f"{prompt} \u2192").classes("mv-thesis-text")
+    ui.label("EDIT").classes("mv-thesis-edit-tag")
+    line.on("click", lambda _: on_edit())
 
-    ui.html(_conviction_bars_html(view.conviction)).classes("mv-conviction")
 
-    ui.label(s_label).classes("mv-updated").style(
-        f"color:{s_color};font-size:0.71rem;white-space:nowrap;text-align:right;"
+def _build_thesis_editor(view: MacroView, save, on_done):
+    ta = ui.textarea(
+        value=view.lean,
+        placeholder=STARTER_GUIDANCE.get(view.id, {}).get(
+            "lean", "One sentence \u2014 direction, magnitude, where uncertainty sits\u2026"
+        ),
+    ).classes("w-full dark-input").style("margin-top:0.2rem; min-height:64px;")
+
+    def on_blur(_):
+        view.lean = ta.value
+        view.last_touched = datetime.now(tz=timezone.utc)
+        save()
+        on_done()
+
+    ta.on("blur", on_blur)
+
+
+def _build_direction_chips(view: MacroView, on_select):
+    ui.label("DIRECTION").classes("mv-chip-label")
+    for option in ["Bearish", "Neutral", "Bullish", "No View"]:
+        chip = ui.button(option, on_click=lambda _, v=option: on_select(v)).classes("mv-chip")
+        if option == view.direction:
+            dc = DIRECTION_COLORS.get(option, DIRECTION_COLORS["No View"])
+            chip.classes(add="is-active")
+            if option == "No View":
+                chip.style(
+                    "color:var(--text-muted) !important;"
+                    "border-color:var(--border-strong) !important;"
+                    "background:var(--bg-hover) !important;"
+                )
+            else:
+                chip.style(
+                    f"color:{dc['text']} !important;"
+                    f"border-color:{dc['text']} !important;"
+                    f"background:{dc['text']}18 !important;"
+                )
+
+
+def _build_conviction_chips(view: MacroView, on_select):
+    ui.label("CONVICTION").classes("mv-chip-label")
+    for option in ["Low", "Medium", "High", "\u2014"]:
+        chip = ui.button(option, on_click=lambda _, v=option: on_select(v)).classes("mv-chip")
+        if option == view.conviction:
+            chip.classes(add="is-active")
+
+
+# ── Card renderer ──────────────────────────────────────────────────────
+
+def _render_card(view: MacroView, save, open_drawer_fn, index: int) -> dict:
+    """Render one inline quick-set card. Returns refresh helpers for external callers."""
+    dc = DIRECTION_COLORS.get(view.direction, DIRECTION_COLORS["No View"])
+    card = ui.element("div").classes("mv-card").style(
+        f"border-left-color:{dc['text']};"
     )
+    with card:
+        header_el = ui.element("div").classes("mv-card-header")
+        thesis_el = ui.element("div")
+        dir_el = ui.element("div").classes("mv-chip-row")
+        conv_el = ui.element("div").classes("mv-chip-row")
 
-    ui.label("›").classes("mv-arrow").style(
-        "color:var(--text-faint);font-size:1rem;text-align:center;line-height:1;"
-    )
+    card_state = {"editing_thesis": False}
 
+    def refresh_accent():
+        dc = DIRECTION_COLORS.get(view.direction, DIRECTION_COLORS["No View"])
+        card.style(f"border-left-color:{dc['text']};")
+
+    def refresh_header():
+        header_el.clear()
+        with header_el:
+            _build_card_header(view, index, open_drawer_fn)
+
+    def refresh_thesis():
+        thesis_el.clear()
+        with thesis_el:
+            if card_state["editing_thesis"]:
+                _build_thesis_editor(view, save, _on_thesis_done)
+            else:
+                _build_thesis_summary(view, _on_thesis_edit)
+
+    def refresh_direction():
+        dir_el.clear()
+        with dir_el:
+            _build_direction_chips(view, _on_dir_select)
+
+    def refresh_conviction():
+        conv_el.clear()
+        with conv_el:
+            _build_conviction_chips(view, _on_conv_select)
+
+    def _on_thesis_edit():
+        card_state["editing_thesis"] = True
+        refresh_thesis()
+
+    def _on_thesis_done():
+        card_state["editing_thesis"] = False
+        refresh_thesis()
+        refresh_header()
+
+    def _on_dir_select(value):
+        view.direction = value
+        view.last_touched = datetime.now(tz=timezone.utc)
+        save()
+        refresh_accent()
+        refresh_header()
+        refresh_direction()
+
+    def _on_conv_select(value):
+        view.conviction = value
+        view.last_touched = datetime.now(tz=timezone.utc)
+        save()
+        refresh_header()
+        refresh_conviction()
+
+    refresh_header()
+    refresh_thesis()
+    refresh_direction()
+    refresh_conviction()
+
+    return {"refresh_header": refresh_header}
+
+
+# ── Drawer (signals + counter only) ────────────────────────────────────
+
+def _render_drawer(view: MacroView, save, dialog, refresh_header):
+    def update_and_save():
+        view.last_touched = datetime.now(tz=timezone.utc)
+        save()
+        if refresh_header:
+            refresh_header()
+
+    with ui.row().style(
+        "width:100%;align-items:center;justify-content:space-between;"
+        "margin-bottom:1.5rem;border-bottom:1px solid var(--border);padding-bottom:1rem;"
+    ):
+        ui.label(view.name).style(
+            "font-size:1rem;font-weight:700;color:var(--accent);letter-spacing:0.08em;"
+        )
+        ui.button("\u2715", on_click=dialog.close).style(
+            "background:transparent;color:var(--text-muted);box-shadow:none;"
+            "min-width:unset;padding:0 0.5rem;font-size:1rem;line-height:1;"
+        )
+
+    ui.label("THREE SUPPORTING SIGNALS").classes("field-label")
+    signal_inputs = []
+    for i in range(3):
+        signal_prompts = STARTER_GUIDANCE.get(view.id, {}).get("signals", [])
+        si = ui.input(
+            value=view.signals[i] if i < len(view.signals) else "",
+            placeholder=signal_prompts[i] if i < len(signal_prompts)
+            else "Data point, model output, or market behavior\u2026"
+        ).classes("w-full dark-input").style("margin-bottom:4px;")
+        signal_inputs.append(si)
+
+    def save_signals(v=view, sis=signal_inputs):
+        v.signals = [s.value for s in sis]
+        update_and_save()
+
+    for si in signal_inputs:
+        si.on("blur", lambda _, fn=save_signals: fn())
+
+    ui.label("THE COUNTER").classes("field-label").style("margin-top:0.75rem;")
+    counter_input = ui.textarea(
+        value=view.counter,
+        placeholder=STARTER_GUIDANCE.get(view.id, {}).get(
+            "counter", "Best argument against your own view\u2026"
+        )
+    ).classes("w-full dark-input")
+    counter_input.on("blur", lambda _, v=view, ci=counter_input: (
+        setattr(v, "counter", ci.value), update_and_save()
+    ))
+
+
+# ── Public entry point ─────────────────────────────────────────────────
 
 def render_macro_views(state: AppState, save_indicator):
     _inject_css()
     summary_controls = {}
+    card_refreshers: dict = {}
 
     def save():
         save_state(state)
@@ -251,8 +419,6 @@ def render_macro_views(state: AppState, save_indicator):
             summary_controls["count"].set_text(f"{completed_now} / {total_now} views set")
             summary_controls["fill"].style(f"width:{round(completed_now / total_now * 100)}%;")
 
-    row_containers: dict[str, ui.element] = {}
-
     # ── Side drawer (Quasar right-position dialog) ─────────────────────────────
     with ui.dialog().props('position="right" full-height').style(
         "font-family:'IBM Plex Mono',monospace;"
@@ -263,9 +429,11 @@ def render_macro_views(state: AppState, save_indicator):
     def open_drawer(view: MacroView):
         drawer_body.clear()
         with drawer_body:
-            _render_drawer(view, state, save, drawer, row_containers)
+            refresher = card_refreshers.get(view.id, {})
+            _render_drawer(view, save, drawer, refresher.get("refresh_header"))
         drawer.open()
 
+    # ── Summary banner ─────────────────────────────────────────────────────────
     completed = sum(
         1 for view in state.macro_views
         if view.direction != "No View" and bool(view.lean.strip())
@@ -276,7 +444,8 @@ def render_macro_views(state: AppState, save_indicator):
         with ui.element("div"):
             ui.label("MACRO VIEW INVENTORY").classes("mv-summary-title")
             ui.label(
-                "Click a theme to set the thesis, evidence, conviction, and strongest counterargument."
+                "Set direction and conviction inline, edit the thesis, "
+                "then open Details for signals and the counter."
             ).classes("mv-summary-copy")
         with ui.element("div").style("flex-shrink:0;"):
             summary_controls["count"] = ui.label(f"{completed} / {total} views set").style(
@@ -285,27 +454,16 @@ def render_macro_views(state: AppState, save_indicator):
             with ui.element("div").classes("mv-progress-track"):
                 summary_controls["fill"] = ui.element("div").classes("mv-progress-fill").style(f"width:{pct}%;")
 
-    # ── Column headers ─────────────────────────────────────────────────────────
-    with ui.element("div").classes("mv-grid-header"):
-        for label in ["DIRECTION", "VARIABLE", "LEAN", "CONV", "UPDATED", ""]:
-            ui.label(label).style(
-                "font-size:0.59rem;font-weight:700;color:var(--text-faint);"
-                "letter-spacing:0.14em;font-family:'IBM Plex Mono',monospace;"
-            )
-
-    # ── Grid rows ──────────────────────────────────────────────────────────────
-    with ui.column().style("width:100%;gap:0.3rem;"):
-        for view in state.macro_views:
-            row_el = ui.element("div").classes("mv-grid-row")
-            row_containers[view.id] = row_el
-            with row_el:
-                _build_row_contents(view)
-            row_el.on("click", lambda _, v=view: open_drawer(v))
+    # ── Cards ──────────────────────────────────────────────────────────────────
+    with ui.column().style("width:100%;gap:0.75rem;"):
+        for idx, view in enumerate(state.macro_views, 1):
+            refresher = _render_card(view, save, open_drawer, idx)
+            card_refreshers[view.id] = refresher
 
     # ── Notes ──────────────────────────────────────────────────────────────────
     ui.label("NOTES").classes("section-header").style("margin-top:2rem;")
     notes_area = ui.textarea(
-        placeholder="Cross-cutting themes, half-formed ideas, anything that doesn't fit neatly into a single variable…"
+        placeholder="Cross-cutting themes, half-formed ideas, anything that doesn't fit neatly into a single variable\u2026"
     ).classes("w-full dark-input").style("min-height:120px;")
     notes_area.value = state.macro_notes
 
@@ -314,91 +472,3 @@ def render_macro_views(state: AppState, save_indicator):
         save()
 
     notes_area.on("blur", lambda _: on_notes_blur())
-
-
-def _render_drawer(
-    view: MacroView,
-    state: AppState,
-    save,
-    dialog,
-    row_containers: dict,
-):
-    def update_and_save():
-        view.last_touched = datetime.now(tz=timezone.utc)
-        save()
-        row_el = row_containers.get(view.id)
-        if row_el is not None:
-            row_el.clear()
-            with row_el:
-                _build_row_contents(view)
-
-    # ── Drawer header ──────────────────────────────────────────────────────────
-    with ui.row().style(
-        "width:100%;align-items:center;justify-content:space-between;"
-        "margin-bottom:1.5rem;border-bottom:1px solid var(--border);padding-bottom:1rem;"
-    ):
-        ui.label(view.name).style(
-            "font-size:1rem;font-weight:700;color:var(--accent);letter-spacing:0.08em;"
-        )
-        ui.button("✕", on_click=dialog.close).style(
-            "background:transparent;color:var(--text-muted);box-shadow:none;"
-            "min-width:unset;padding:0 0.5rem;font-size:1rem;line-height:1;"
-        )
-
-    # ── Direction ─────────────────────────────────────────────────────────────
-    ui.label("VIEW DIRECTION").classes("field-label")
-    _choice_control(
-        ["Bearish", "Neutral", "Bullish", "No View"],
-        lambda: view.direction,
-        lambda value: (setattr(view, "direction", value), update_and_save()),
-    )
-
-    # ── Conviction ────────────────────────────────────────────────────────────
-    ui.label("CONVICTION").classes("field-label").style("margin-top:0.75rem;")
-    _choice_control(
-        ["Low", "Medium", "High", "—"],
-        lambda: view.conviction,
-        lambda value: (setattr(view, "conviction", value), update_and_save()),
-    )
-
-    # ── Lean ──────────────────────────────────────────────────────────────────
-    ui.label("DIRECTIONAL LEAN").classes("field-label").style("margin-top:0.75rem;")
-    lean_input = ui.textarea(
-        value=view.lean,
-        placeholder=STARTER_GUIDANCE.get(view.id, {}).get(
-            "lean", "One sentence — direction, magnitude, where uncertainty sits…"
-        )
-    ).classes("w-full dark-input")
-    lean_input.on("blur", lambda _, v=view, li=lean_input: (
-        setattr(v, "lean", li.value), update_and_save()
-    ))
-
-    # ── Signals ───────────────────────────────────────────────────────────────
-    ui.label("THREE SUPPORTING SIGNALS").classes("field-label").style("margin-top:0.75rem;")
-    signal_inputs = []
-    for i in range(3):
-        signal_prompts = STARTER_GUIDANCE.get(view.id, {}).get("signals", [])
-        si = ui.input(
-            value=view.signals[i] if i < len(view.signals) else "",
-            placeholder=signal_prompts[i] if i < len(signal_prompts) else "Data point, model output, or market behavior…"
-        ).classes("w-full dark-input").style("margin-bottom:4px;")
-        signal_inputs.append(si)
-
-    def save_signals(v=view, sis=signal_inputs):
-        v.signals = [s.value for s in sis]
-        update_and_save()
-
-    for si in signal_inputs:
-        si.on("blur", lambda _, fn=save_signals: fn())
-
-    # ── Counter ───────────────────────────────────────────────────────────────
-    ui.label("THE COUNTER").classes("field-label").style("margin-top:0.75rem;")
-    counter_input = ui.textarea(
-        value=view.counter,
-        placeholder=STARTER_GUIDANCE.get(view.id, {}).get(
-            "counter", "Best argument against your own view…"
-        )
-    ).classes("w-full dark-input")
-    counter_input.on("blur", lambda _, v=view, ci=counter_input: (
-        setattr(v, "counter", ci.value), update_and_save()
-    ))

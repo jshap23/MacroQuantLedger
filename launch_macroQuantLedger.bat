@@ -10,9 +10,11 @@ timeout /t 1 /nobreak >nul
 
 echo Starting MacroQuant Ledger...
 call C:\Users\jshap\miniforge3\Scripts\activate.bat mqledger
-python app.py
-if %errorlevel% neq 0 (
-    echo.
-    echo ERROR: App failed to start. See message above.
-    pause
-)
+
+start "MacroQuant Ledger Server" /min python app.py
+
+echo Waiting for server to start...
+timeout /t 3 /nobreak >nul
+
+echo Opening Microsoft Edge...
+start "" "microsoft-edge:http://localhost:8080"

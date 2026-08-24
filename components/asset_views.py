@@ -20,8 +20,39 @@ SCORE_COLORS = {
     "—": {"bg": "#1e1e24", "text": "#44445a", "dot": "#44445a"},
 }
 
+_CSS_INJECTED = False
+
+
+def _inject_css():
+    global _CSS_INJECTED
+    if _CSS_INJECTED:
+        return
+    _CSS_INJECTED = True
+    ui.add_head_html('''<style id="mq-asset-views-css">
+        .asset-note-label {
+            cursor: pointer;
+            font-family: var(--font-ui);
+            line-height: 1.35;
+            color: var(--text-muted);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            overflow-wrap: break-word;
+            transition: color 0.15s;
+            padding: 1px 0;
+        }
+        .asset-note-label:hover { color: var(--accent); }
+        .asset-note-label-empty {
+            color: var(--text-faint) !important;
+            font-style: italic;
+        }
+        .asset-note-label-empty:hover { color: var(--accent) !important; }
+    </style>''')
+
 
 def render_asset_views(state: AppState, save_indicator):
+    _inject_css()
     def save():
         save_state(state)
         save_indicator()
@@ -115,56 +146,86 @@ def _score_control(av: AssetView, save, stale_lbl: list, *, compact: bool) -> No
     render()
 
 
-def _note_preview_input(av: AssetView, save, *, placeholder: str, font_size: str | None, stale_lbl: list | None = None):
-    """Read-only note strip; click opens the full editor (no separate expand button)."""
-    style = "flex:1; min-width:0; cursor:pointer;"
+def _note_preview_label(
+    av: AssetView,
+    save,
+    *,
+    placeholder: str,
+    font_size: str | None = None,
+    stale_lbl: list | None = None,
+):
+    """Clickable multiline note preview; click opens the full editor modal.
+
+    Renders the note text (or a placeholder when empty) capped to 2 visual
+    lines via CSS line-clamp.  After the modal saves, ``refresh()`` re-reads
+    ``av.note`` and updates the label text + empty-state class in place.
+    """
+    style = "width:100%;"
     if font_size:
         style += f" font-size:{font_size};"
-    note_in = ui.input(value=av.note, placeholder=placeholder).classes("dark-input").style(style)
-    note_in.props("readonly")
-    note_in.tooltip("Click to edit note")
-    note_in.on("click", lambda _: _open_note_dialog(av, note_in, save, stale_lbl=stale_lbl))
-    return note_in
+
+    def _display_text() -> str:
+        return av.note.strip() if av.note else ""
+
+    text = _display_text()
+    classes = "asset-note-label"
+    if not text:
+        text = placeholder
+        classes += " asset-note-label-empty"
+
+    lbl = ui.label(text).classes(classes).style(style)
+    lbl.tooltip("Click to edit note")
+
+    def refresh():
+        new_text = _display_text()
+        lbl.text = new_text if new_text else placeholder
+        if new_text:
+            lbl.classes(remove="asset-note-label-empty")
+        else:
+            lbl.classes(add="asset-note-label-empty")
+
+    lbl.on("click", lambda _: _open_note_dialog(av, save, stale_lbl=stale_lbl, refresh_note=refresh))
+    return lbl
 
 
 def _l1_row(av: AssetView, save):
-    with ui.row().classes("w-full asset-row-l1").style("align-items:center; gap:0.75rem;"):
-        ui.label(av.name).style(
-            "font-weight:700; font-size:0.95rem; min-width:140px; flex-shrink:0;"
-        )
-
+    with ui.column().classes("w-full asset-row-l1").style("gap:0;"):
         stale_lbl = [None]
-        _score_control(av, save, stale_lbl, compact=False)
-
-        _note_preview_input(
+        # Line 1: name + score + staleness
+        with ui.row().classes("w-full").style("align-items:center; gap:0.75rem;"):
+            ui.label(av.name).style(
+                "font-weight:700; font-size:0.95rem; min-width:140px; flex-shrink:0;"
+            )
+            _score_control(av, save, stale_lbl, compact=False)
+            stale_lbl[0] = _staleness_label(av)
+        # Line 2: note/thesis (clickable, 2-line clamp)
+        _note_preview_label(
             av,
             save,
-            placeholder="Click to edit cross-asset thesis…",
-            font_size=None,
+            placeholder="Click to add cross-asset thesis…",
+            font_size="0.88rem",
             stale_lbl=stale_lbl,
         )
-
-        stale_lbl[0] = _staleness_label(av)
 
 
 def _l2_row(av: AssetView, save):
-    with ui.row().classes("w-full asset-row-l2").style("align-items:center; gap:0.5rem;"):
-        ui.label(av.name).style(
-            "font-size:0.85rem; min-width:110px; flex-shrink:0; color:var(--text-primary);"
-        )
-
+    with ui.column().classes("w-full asset-row-l2").style("gap:0;"):
         stale_lbl = [None]
-        _score_control(av, save, stale_lbl, compact=True)
-
-        _note_preview_input(
+        # Line 1: name + score + staleness
+        with ui.row().classes("w-full").style("align-items:center; gap:0.5rem;"):
+            ui.label(av.name).style(
+                "font-size:0.85rem; min-width:110px; flex-shrink:0; color:var(--text-primary);"
+            )
+            _score_control(av, save, stale_lbl, compact=True)
+            stale_lbl[0] = _staleness_label(av, compact=True)
+        # Line 2: note/thesis (clickable, 2-line clamp)
+        _note_preview_label(
             av,
             save,
-            placeholder="Click to edit thesis…",
-            font_size="0.82rem",
+            placeholder="Click to add thesis…",
+            font_size="0.8rem",
             stale_lbl=stale_lbl,
         )
-
-        stale_lbl[0] = _staleness_label(av, compact=True)
 
 
 
@@ -341,8 +402,8 @@ def _touch_save(av: AssetView, field: str | None, value, save):
     save()
 
 
-def _open_note_dialog(av: AssetView, note_in, save, *, stale_lbl: list | None = None):
-    """Modal editor for the row note (av.note); syncs inline input on Done."""
+def _open_note_dialog(av: AssetView, save, *, stale_lbl: list | None = None, refresh_note=None):
+    """Modal editor for the row note (av.note); syncs inline label on Done."""
     with ui.dialog() as dialog, ui.card().style(
         "background:var(--bg-card); color:var(--text-primary); "
         "font-family:'IBM Plex Mono',monospace; min-width:min(560px,92vw); padding:1.5rem;"
@@ -353,11 +414,12 @@ def _open_note_dialog(av: AssetView, note_in, save, *, stale_lbl: list | None = 
         ta = ui.textarea(
             placeholder="Thesis, risks, catalysts — as much detail as you need…",
         ).classes("w-full dark-input").style("min-height:min(280px,40vh); font-size:0.88rem;")
-        ta.value = note_in.value
+        ta.value = av.note
 
         def on_done():
             _touch_save(av, "note", ta.value, save)
-            note_in.set_value(av.note)
+            if refresh_note:
+                refresh_note()
             if stale_lbl and stale_lbl[0] is not None:
                 _refresh_staleness(stale_lbl[0], av)
             dialog.close()

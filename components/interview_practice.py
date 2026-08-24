@@ -227,16 +227,8 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
             if not chosen:
                 ui.notify("Select at least one View.", type="warning"); return
             state["view_setup"] = {"ids": chosen, "style": style.value or "Deliver"}; refresh()
-        def surprise():
-            ranked = sorted(active, key=lambda view: (
-                0 if view.priority == "Core" else 1,
-                view.practice.last_practiced is not None,
-                view.practice.last_practiced or view.created_at,
-            ))
-            configure([ranked[0].id])
         with ui.row().style("gap:.5rem;flex-wrap:wrap;margin-top:.65rem"):
             ui.button("Begin", icon="play_arrow", on_click=lambda: configure()).classes("submit-btn")
-            ui.button("Surprise Me", icon="shuffle", on_click=surprise).classes("cancel-btn")
 
 
 def _render_view_setup(state: dict, refresh, app_state) -> None:
