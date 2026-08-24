@@ -45,6 +45,17 @@ def _migrate(state: AppState) -> AppState:
         state.topic_views_version = 1
         changed = True
 
+    if state.topic_views_version < 2:
+        state.topic_views_version = 2
+        changed = True
+
+    if state.topic_views_version < 3:
+        for topic_view in state.topic_views:
+            if topic_view.tags is None:
+                topic_view.tags = []
+        state.topic_views_version = 3
+        changed = True
+
     # Seed asset_views if missing (new field)
     if not state.asset_views:
         state.asset_views = [v.model_copy() for v in DEFAULT_ASSET_VIEWS]

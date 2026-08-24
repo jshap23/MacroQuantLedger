@@ -97,10 +97,12 @@ class TopicView(BaseModel):
     )
     counterargument: str = ""
     changes_my_mind: str = ""
+    watch: list[str] = Field(default_factory=list)
     status: Literal["Developing", "Ready", "Needs Refresh"] = "Developing"
     priority: Literal["Core", "Normal", "Low Priority"] = "Normal"
     archived: bool = False
     related_view_ids: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now_utc)
     updated_at: datetime = Field(default_factory=_now_utc)
     practice: ViewPracticeMeta = Field(default_factory=ViewPracticeMeta)
@@ -157,5 +159,5 @@ def default_state() -> AppState:
         quant_focus="",
         quant_focus_next="",
         reconciliations=[],
-        topic_views_version=1,
+        topic_views_version=3,
     )
