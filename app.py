@@ -8,14 +8,14 @@ from components.macro_views import render_macro_views
 from components.reconciliation import render_reconciliation
 from components.asset_views import render_asset_views
 from components.fred_panel import render_fred_panel
-from components.briefing import render_briefing
 from components.trades import render_trades
 from components.attribution import render_attribution
 from components.interview_practice import render_interview_practice
 from components.topic_views import render_topic_views
 from components.today import render_today
 from export.excel import generate_excel
-from storage.user_settings import obsidian_export_path, save_obsidian_export_path
+from storage.user_settings import obsidian_export_path, save_obsidian_export_path, obsidian_views_folder, save_obsidian_views_folder
+from storage.topic_view_sync import sync_is_enabled, set_sync_enabled
 from services.interview_llm import available as interview_llm_available
 from services.interview_speech import register_interview_speech_routes
 
@@ -444,10 +444,10 @@ body.light-mode .live-dot {
 .today-metric-label { color:var(--text-primary) !important; font-size:0.72rem; font-weight:600; margin-top:0.28rem; }
 .today-metric-detail { color:var(--text-muted) !important; font-size:0.64rem; margin-top:0.1rem; }
 .today-actions { gap:0.55rem; margin:0; flex-wrap:wrap; }
-.today-top-of-mind { width:100%; display:flex; align-items:center; gap:0.65rem; padding:0.45rem 0.55rem; margin-bottom:0.45rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); }
-.today-top-of-mind-label { color:var(--accent) !important; font:700 0.6rem var(--font-data) !important; letter-spacing:0.12em; }
+.today-top-of-mind { width:100%; display:flex; align-items:flex-start; gap:0.65rem; padding:0.45rem 0.55rem; margin-bottom:0.45rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); }
+.today-top-of-mind-label { color:var(--accent) !important; font:700 0.6rem var(--font-data) !important; letter-spacing:0.12em; padding-top:0.45rem; }
 .today-top-of-mind-input { flex:1; min-width:0; }
-.today-top-of-mind-input textarea { min-height:34px !important; height:34px !important; padding:0.35rem 0.5rem !important; line-height:1.25 !important; resize:none !important; }
+.today-top-of-mind-input textarea { min-height:96px !important; height:auto !important; padding:0.4rem 0.55rem !important; line-height:1.35 !important; resize:vertical !important; }
 .export-btn {
     background: var(--accent) !important;
     color: #fff !important;
@@ -702,8 +702,9 @@ def index():
                         "font-size:1rem; font-weight:700; color:var(--accent); margin-bottom:0.3rem;"
                     )
                     ui.label(
-                        "The Obsidian export folder is used for Topics/Views exports. "
-                        "The setting is stored locally in data/user_settings.json."
+                        "Obsidian export writes notes one-way. Obsidian Views sync is a separate, "
+                        "optional bidirectional folder for My Views. Settings are stored locally in "
+                        "data/user_settings.json."
                     ).style(
                         "color:var(--text-muted); font-size:0.78rem; line-height:1.55; margin-bottom:0.8rem;"
                     )
@@ -729,6 +730,16 @@ def index():
                         label="Obsidian export folder",
                         placeholder=r"C:\Path\To\ObsidianVault\MacroQuant",
                     ).classes("w-full dark-input")
+                    current_views_folder = obsidian_views_folder()
+                    views_folder_input = ui.input(
+                        value=str(current_views_folder) if current_views_folder else "",
+                        label="Obsidian Views folder (for My Views sync)",
+                        placeholder=r"C:\Path\To\ObsidianVault\Views",
+                    ).classes("w-full dark-input").style("margin-top:0.6rem")
+                    sync_enabled = ui.checkbox(
+                        "Enable bidirectional My Views sync",
+                        value=sync_is_enabled(),
+                    ).style("margin-top:0.5rem")
                     settings_status = ui.label("").style(
                         "font-size:0.72rem; color:#f87171; min-height:1rem; margin-top:0.4rem;"
                     )
@@ -736,11 +747,14 @@ def index():
                     def save_settings():
                         try:
                             save_obsidian_export_path(path_input.value or "")
+                            if views_folder_input.value:
+                                save_obsidian_views_folder(views_folder_input.value)
+                            set_sync_enabled(sync_enabled.value)
                         except (ValueError, OSError) as exc:
                             settings_status.set_text(str(exc))
                             return
                         dialog.close()
-                        ui.notify("Obsidian export folder saved", type="positive", position="top")
+                        ui.notify("Settings saved", type="positive", position="top")
 
                     with ui.row().style("justify-content:flex-end; gap:0.5rem; margin-top:0.8rem; width:100%;"):
                         ui.button("Cancel", on_click=dialog.close).classes("cancel-btn")
@@ -839,7 +853,6 @@ def index():
     # ── Tabs ──────────────────────────────────────────────────────────────────
     # ── FRED data: load in background, update panel when ready ────────────────
     fred_ref = {"container": None}
-    briefing_ref = {"container": None}
     attribution_ref = {"container": None, "fred_data": None}
 
     async def _load_fred():
@@ -866,9 +879,6 @@ def index():
             inds, ts = [], f"Error: {exc}"
         c = fred_ref.get("container")
         if not refresh_if_alive(c, lambda: render_fred_panel(inds, ts)):
-            return
-        bc = briefing_ref.get("container")
-        if not refresh_if_alive(bc, lambda: render_briefing(s, save_indicator, inds)):
             return
         attribution_ref["fred_data"] = inds
         ac = attribution_ref.get("container")
@@ -921,18 +931,12 @@ def index():
 
         with ui.tab_panel(tab_research):
             with ui.tabs().props('align="left"').classes("secondary-tabs w-full") as research_tabs:
-                research_briefing = ui.tab("Briefing")
                 research_data = ui.tab("Economic Data")
             navigation["secondary"]["research"] = research_tabs
             navigation["secondary"].update({
-                "briefing": research_briefing,
                 "data": research_data,
             })
-            with ui.tab_panels(research_tabs, value=research_briefing).classes("secondary-panels w-full"):
-                with ui.tab_panel(research_briefing):
-                    with ui.element("div").style("width:100%;") as _briefing_c:
-                        render_briefing(s, save_indicator, None)
-                    briefing_ref["container"] = _briefing_c
+            with ui.tab_panels(research_tabs, value=research_data).classes("secondary-panels w-full"):
                 with ui.tab_panel(research_data):
                     with ui.element("div").style("width:100%;") as _fred_c:
                         with ui.column().style("align-items:center; padding:4rem; gap:0.75rem;"):
@@ -983,4 +987,5 @@ ui.run(
     port=int(os.environ.get("MQLEDGER_PORT", "8080")),
     reload=False,
     host="0.0.0.0",
+    show=False,
 )
