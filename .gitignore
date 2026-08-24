@@ -13,6 +13,8 @@ data/*.xlsx
 data/briefing_cache.json
 data/interview_history.json
 data/user_settings.json
+data/topic_view_sync.json
+data/backups/
 data/models/
 data/speech_runtime/
 export/*.xlsx
