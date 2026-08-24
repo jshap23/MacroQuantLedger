@@ -22,7 +22,14 @@ def _inject_css() -> None:
       .tv-card-tag{display:inline-block;border:1px solid var(--border);border-radius:99px;padding:2px 7px;font:500 .6rem 'IBM Plex Mono',monospace;color:var(--text-muted);background:var(--bg-input)}
       .tv-filter-chip{padding:.18rem .55rem !important;border-radius:99px !important;font:600 .65rem 'IBM Plex Mono',monospace !important;color:var(--text-muted) !important;background:var(--bg-input) !important;border:1px solid var(--border) !important;box-shadow:none !important;text-transform:none !important;min-height:unset !important}
       .tv-filter-chip:hover{border-color:var(--border-strong) !important;color:var(--text-primary) !important}
-      .tv-filter-chip.is-active{color:var(--accent) !important;border-color:var(--accent) !important;background:var(--accent-glow) !important}
+      .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active{color:#1a1a1a !important;border-color:#f59e0b !important;background:#f59e0b !important}
+      .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active .q-btn__content{color:#1a1a1a !important}
+      .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active:hover{color:#1a1a1a !important;border-color:#fbbf24 !important;background:#fbbf24 !important}
+      .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active:hover .q-btn__content{color:#1a1a1a !important}
+      body.light-mode .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active{color:#ffffff !important;border-color:#b45309 !important;background:#b45309 !important}
+      body.light-mode .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active .q-btn__content{color:#ffffff !important}
+      body.light-mode .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active:hover{color:#ffffff !important;border-color:#92400e !important;background:#92400e !important}
+      body.light-mode .q-btn.q-btn--standard.q-btn--rectangle.tv-filter-chip.is-active:hover .q-btn__content{color:#ffffff !important}
       .tv-filter-clear{color:var(--text-faint) !important;font-size:.65rem !important;text-transform:none !important;min-height:unset !important}
       .tv-point{background:var(--bg-card);border:1px solid var(--border-strong);border-radius:7px;margin:.75rem 0;padding:.8rem 1rem}.tv-point-head{display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:.5rem}
       .tv-fact{display:grid;grid-template-columns:28px 1fr auto;align-items:start;gap:.45rem;padding:.38rem 0;border-top:1px solid var(--border)}.tv-handle{color:var(--text-faint);cursor:grab;font:700 1rem 'IBM Plex Mono',monospace;padding-top:.5rem}.tv-actions .q-btn{min-width:28px!important;padding:2px!important}
@@ -163,7 +170,7 @@ def _conflict_dialog(state: AppState, local: dict, persist, refresh) -> None:
 
 
 def _tag_filter_bar(state: AppState, local: dict, refresh) -> None:
-    all_tags = sorted({tag for view in state.topic_views for tag in view.tags})
+    all_tags = sorted({tag for view in state.topic_views for tag in view.tags if tag != "view"})
     if not all_tags:
         return
     selected = local["tag_filter"]
@@ -171,7 +178,7 @@ def _tag_filter_bar(state: AppState, local: dict, refresh) -> None:
         ui.label("FILTER:").classes("tv-meta").style("font-weight:700")
         for tag in all_tags:
             is_active = tag in selected
-            btn = ui.button(tag, on_click=lambda _, t=tag: _toggle_tag_filter(local, t, refresh)).classes("tv-filter-chip")
+            btn = ui.button(tag, color=None, on_click=lambda _, t=tag: _toggle_tag_filter(local, t, refresh)).classes("tv-filter-chip")
             if is_active:
                 btn.classes(add="is-active")
         if selected:
@@ -239,9 +246,10 @@ def _cards(views, state, local, persist, refresh) -> None:
                     ui.label(view.priority).classes("tv-pill")
                 ui.label(view.bottom_line or "Bottom line not developed yet.").classes("tv-bottom")
                 ui.label(f"{len(view.points)} points · Practiced {_when(view.practice.last_practiced)} · {view.status}").classes("tv-meta")
-                if view.tags:
+                visible_tags = [tag for tag in view.tags if tag != "view"]
+                if visible_tags:
                     with ui.row().style("gap:.25rem;flex-wrap:wrap;margin-top:.35rem"):
-                        for tag in view.tags:
+                        for tag in visible_tags:
                             ui.label(tag).classes("tv-card-tag")
                 with ui.row().classes("tv-actions").style("gap:.2rem;margin-top:.5rem;justify-content:flex-end"):
                     ui.button("Open", on_click=lambda _, v=view: (local.update(selected=v.id), refresh())).props("flat dense no-caps")
@@ -307,10 +315,11 @@ def _delete_dialog(view, state, persist, refresh):
 def _tag_editor(view: TopicView, persist, refresh) -> None:
     """Removable tag chips plus an input to add normalized tags to ``view.tags``."""
     ui.label("TAGS").classes("section-header").style("margin-top:.8rem")
+    visible_tags = [tag for tag in view.tags if tag != "view"]
     with ui.row().classes("tv-tag-chips"):
-        if not view.tags:
+        if not visible_tags:
             ui.label("No tags yet.").classes("tv-meta")
-        for tag in view.tags:
+        for tag in visible_tags:
             chip = ui.chip(tag, removable=True, color=None).classes("tv-tag-chip")
 
             def on_remove(e, t=tag):
@@ -326,6 +335,9 @@ def _tag_editor(view: TopicView, persist, refresh) -> None:
         def add_tag() -> None:
             raw = (tag_input.value or "").strip().lower()
             if not raw:
+                return
+            if raw == "view":
+                ui.notify("The 'view' tag is managed automatically and cannot be added manually.", type="warning")
                 return
             if raw in view.tags:
                 ui.notify("Tag already exists.", type="warning")
