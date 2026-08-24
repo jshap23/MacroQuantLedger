@@ -223,6 +223,10 @@ def parse_topic_view(text: str, file_path: Path | None = None) -> MarkdownTopicV
                 return "\n".join(block["lines"])
         return ""
 
+    tags = _format_tags(frontmatter.get("tags"))
+    if "view" not in [t.lower() for t in tags]:
+        tags.append("view")
+
     view = TopicView(
         id=view_id,
         name=title or "Untitled View",
@@ -234,6 +238,7 @@ def parse_topic_view(text: str, file_path: Path | None = None) -> MarkdownTopicV
         status=_normalize_status(frontmatter.get("status")),
         priority=_normalize_priority(frontmatter.get("priority")),
         archived=bool(frontmatter.get("archived", False)),
+        tags=tags,
         created_at=_parse_iso(frontmatter.get("created_at")),
         updated_at=_parse_iso(frontmatter.get("updated_at")),
     )
@@ -287,7 +292,7 @@ def render_topic_view(
     fm["status"] = str(view.status).lower()
     fm["priority"] = str(view.priority).lower().replace(" ", "_")
     fm["archived"] = bool(view.archived)
-    tags = _format_tags(fm.get("tags"))
+    tags = _format_tags(view.tags)
     if "view" not in [t.lower() for t in tags]:
         tags.append("view")
     fm["tags"] = tags

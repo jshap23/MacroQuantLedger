@@ -287,6 +287,7 @@ def _apply_vault_to_view(view: TopicView, parsed: MarkdownTopicView) -> None:
     view.status = src.status
     view.priority = src.priority
     view.archived = src.archived
+    view.tags = list(src.tags)
     view.updated_at = _now_utc()
 
 
