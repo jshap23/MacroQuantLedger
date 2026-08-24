@@ -22,7 +22,6 @@ files = [
     'components/macro_views.py',
     'components/asset_views.py',
     'components/briefing_strip.py',
-    'components/briefing.py',
     'components/interview_practice.py',
     'components/topic_views.py',
     'components/interview_speech.py',
@@ -33,6 +32,9 @@ files = [
     'export/common.py',
     'export/excel.py',
     'export/topics.py',
+    'storage/topic_view_markdown.py',
+    'storage/topic_view_sync.py',
+    'validate_topic_view_sync.py',
     'setup_speech_runtime.py',
 ]
 all_ok = True
