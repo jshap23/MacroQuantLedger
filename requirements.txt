@@ -5,3 +5,4 @@ requests>=2.28
 yfinance>=0.2
 openai>=1.40
 faster-whisper>=1.1
+pyyaml>=6.0
