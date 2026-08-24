@@ -986,6 +986,6 @@ ui.run(
     title="MacroQuant Ledger",
     port=int(os.environ.get("MQLEDGER_PORT", "8080")),
     reload=False,
-    host="0.0.0.0",
+    host=os.environ.get("MQLEDGER_HOST", "127.0.0.1"),
     show=False,
 )

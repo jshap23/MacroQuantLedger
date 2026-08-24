@@ -36,6 +36,7 @@ files = [
     'storage/topic_view_sync.py',
     'validate_topic_view_sync.py',
     'setup_speech_runtime.py',
+    'launch.py',
 ]
 all_ok = True
 for f in files:

@@ -20,6 +20,11 @@ pip install -r requirements.txt
 python setup_speech_runtime.py
 
 # Run the app (serves on http://localhost:8080 by default; override with MQLEDGER_PORT)
+# Production-style launch: no console window, single-instance enforcement, auto-opens browser
+launch_macroQuantLedger.bat
+# Or directly from an activated conda shell:
+python launch.py
+# Development / manual run:
 python app.py
 
 # Validate syntax across core files
@@ -218,6 +223,7 @@ My Views can optionally sync bidirectionally with a dedicated Obsidian Views fol
 | `OBSIDIAN_EXPORT_PATH` | Optional | Override Obsidian export folder |
 | `OBSIDIAN_VIEWS_FOLDER` | Optional | Override Obsidian Views folder for bidirectional My Views sync |
 | `MQLEDGER_PORT` | Optional | App port (default `8080`) |
+| `MQLEDGER_HOST` | Optional | App bind host (default `127.0.0.1`) |
 | `INTERVIEW_API_KEY` | Optional | API key for interview LLM |
 | `INTERVIEW_BASE_URL` | Optional | Interview LLM endpoint |
 | `INTERVIEW_MODEL` | Optional | Interview model slug |
@@ -252,5 +258,5 @@ data/
 ### Documentation Notes
 
 - **`CLAUDE.md` is now stale.** It still describes a 6-tab layout, 15 asset views, a hardcoded Obsidian path, and `SPEC.md` as authoritative. Do not trust it for current structure.
-- **`check_syntax.py` checks 37 files** (previously 33).
+- **`check_syntax.py` checks 38 files** (previously 37).
 - **Trust actual source code** over any markdown documentation.
