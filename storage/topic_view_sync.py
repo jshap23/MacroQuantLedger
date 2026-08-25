@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -90,6 +91,34 @@ class SyncResult(BaseModel):
         return bool(self.imported or self.exported or self.created or self.conflicts or self.errors)
 
 
+class SyncDecision(BaseModel):
+    """One reviewable difference between the app and the vault.
+
+    `key` is the view_id, or ``path:<filename>`` for vault notes that do not
+    carry an adopted id yet. `vault_hash` pins the note bytes seen at plan
+    time so apply can refuse to act on files that changed since review.
+    """
+    key: str
+    view_id: str = ""
+    name: str
+    action: str  # EXPORT | IMPORT | CREATE | CONFLICT
+    filename: str = ""
+    vault_hash: str = ""
+    detail: str = ""
+    app_updated_at: Optional[datetime] = None
+    vault_updated_at: Optional[datetime] = None
+    app_points: int = 0
+    vault_points: int = 0
+    app_bottom_line: str = ""
+    vault_bottom_line: str = ""
+
+
+class SyncPlan(BaseModel):
+    decisions: list[SyncDecision] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 def load_sync_state() -> SyncState:
     """Return the persisted state verbatim, including a stale format_version.
 
@@ -139,11 +168,15 @@ def _vault_fallback(folder: Path, view_id: str) -> Path:
 def _scan_vault(
     folder: Path,
     records: dict[str, SyncRecord] | None = None,
+    write_back: bool = True,
 ) -> tuple[dict[str, MarkdownTopicView], dict[str, str], list[str], list[dict]]:
     """Scan folder for Markdown notes keyed by frontmatter view_id.
 
     Notes with duplicate owned sections are unsafe: they are excluded from all
     sync decisions (and never adopted/rewritten) and returned for reporting.
+    With ``write_back=False`` (read-only planning) notes lacking a view id are
+    NOT adopted; they are indexed under a ``path:<filename>`` pseudo key so a
+    plan can reference them without touching the file.
     Returns (found, occupied, warnings, unsafe).
     """
     found: dict[str, MarkdownTopicView] = {}
@@ -171,6 +204,11 @@ def _scan_vault(
             continue
         try:
             if not (parsed.frontmatter.get("view_id") or parsed.frontmatter.get("id")):
+                if not write_back:
+                    pseudo = f"path:{path.name}"
+                    candidates.setdefault(pseudo, []).append((path, text))
+                    occupied[path.name.lower()] = pseudo
+                    continue
                 write_topic_view(parsed.view, path, prior=parsed)
                 text = path.read_text(encoding="utf-8")
                 parsed = parse_topic_view(text, path)
@@ -409,14 +447,36 @@ def _update_record(
     )
 
 
+def _migration_gate(sync_state: SyncState, folder: Path, result: SyncResult) -> bool:
+    """One-time format migration with a pre-change backup. False aborts callers."""
+    if sync_state.format_version == FORMAT_VERSION:
+        return True
+    ok, detail = _backup_before_migration(folder)
+    if not ok:
+        result.errors.append(
+            f"Pre-migration backup failed; sync aborted and nothing was modified. {detail}"
+        )
+        return False
+    sync_state.records.clear()
+    sync_state.format_version = FORMAT_VERSION
+    save_sync_state(sync_state)
+    result.warnings.append(f"Pre-migration backup saved to {detail}")
+    return True
+
+
+def _resolve_folder(folder: Path | None) -> Path | None:
+    if folder is not None:
+        return folder
+    raw = obsidian_views_folder()
+    return Path(raw) if raw else None
+
+
 def sync_topic_views(state: AppState, folder: Path | None = None) -> SyncResult:
     """Reconcile app state with the Obsidian Views folder and apply safe changes."""
     result = SyncResult()
     sync_state = load_sync_state()
 
-    if folder is None:
-        raw = obsidian_views_folder()
-        folder = raw if raw else None
+    folder = _resolve_folder(folder)
     if folder is None or not sync_state.enabled:
         return result
 
@@ -429,17 +489,8 @@ def sync_topic_views(state: AppState, folder: Path | None = None) -> SyncResult:
 
     sync_state.folder = str(folder)
 
-    if sync_state.format_version != FORMAT_VERSION:
-        ok, detail = _backup_before_migration(folder)
-        if not ok:
-            result.errors.append(
-                f"Pre-migration backup failed; sync aborted and nothing was modified. {detail}"
-            )
-            return result
-        sync_state.records.clear()
-        sync_state.format_version = FORMAT_VERSION
-        save_sync_state(sync_state)
-        result.warnings.append(f"Pre-migration backup saved to {detail}")
+    if not _migration_gate(sync_state, folder, result):
+        return result
 
     vault_views, occupied, scan_warnings, unsafe_notes = _scan_vault(folder, sync_state.records)
     result.warnings.extend(scan_warnings)
@@ -555,9 +606,7 @@ def resolve_conflict(
     result = SyncResult()
     sync_state = load_sync_state()
 
-    if folder is None:
-        raw = obsidian_views_folder()
-        folder = raw if raw else None
+    folder = _resolve_folder(folder)
     if folder is None:
         result.errors.append("No Obsidian Views folder configured.")
         return result
@@ -614,6 +663,210 @@ def resolve_conflict(
     else:
         result.errors.append(f"Unknown conflict side: {side}")
         return result
+
+    save_sync_state(sync_state)
+    return result
+
+
+def _decision_key(view: TopicView | None, parsed: MarkdownTopicView) -> str:
+    if view is not None:
+        return view.id
+    fm_id = str(parsed.frontmatter.get("view_id") or parsed.frontmatter.get("id") or "").strip()
+    return fm_id if fm_id else f"path:{parsed.path.name}"
+
+
+def _decision_for(
+    view: TopicView | None,
+    parsed: MarkdownTopicView | None,
+    record: SyncRecord | None,
+    file_content: str | None,
+) -> SyncDecision | None:
+    action = _decide_action(
+        view,
+        parsed,
+        record,
+        file_content,
+        view_fp=_fingerprint(view, None) if view is not None else "",
+    )
+    if action == "NOOP":
+        return None
+    key = _decision_key(view, parsed) if parsed is not None else (view.id if view else "")
+    missing_note = view is not None and parsed is None
+    return SyncDecision(
+        key=key,
+        view_id="" if key.startswith("path:") else key,
+        name=view.name if view is not None else (parsed.view.name if parsed else key),
+        action=action,
+        filename=parsed.path.name if parsed is not None else (note_filename(view.name) if view else ""),
+        vault_hash=topic_view_content_hash(file_content) if file_content else "",
+        detail="Note missing in Obsidian" if missing_note else "",
+        app_updated_at=_ensure_utc(view.updated_at) if view is not None else None,
+        vault_updated_at=_ensure_utc(parsed.view.updated_at) if parsed is not None else None,
+        app_points=len(view.points) if view is not None else 0,
+        vault_points=len(parsed.view.points) if parsed is not None else 0,
+        app_bottom_line=(view.bottom_line or "")[:200] if view is not None else "",
+        vault_bottom_line=(parsed.view.bottom_line or "")[:200] if parsed is not None else "",
+    )
+
+
+def plan_sync(state: AppState, folder: Path | None = None) -> SyncPlan:
+    """Read-only app-vs-vault diff. Writes nothing: records untouched, notes
+    untouched, id-less notes reported under ``path:`` keys rather than adopted.
+    Pair with apply_sync_plan, which executes only the approved subset."""
+    plan = SyncPlan()
+    sync_state = load_sync_state()
+    folder = _resolve_folder(folder)
+    if folder is None or not sync_state.enabled:
+        return plan
+
+    if not _migration_gate(sync_state, folder, plan):
+        return plan
+    if not folder.exists():
+        return plan
+
+    vault_views, _occupied, scan_warnings, unsafe_notes = _scan_vault(
+        folder, sync_state.records, write_back=False
+    )
+    plan.warnings.extend(scan_warnings)
+    for entry in unsafe_notes:
+        dups = ", ".join(entry["duplicates"])
+        plan.errors.append(
+            f"{entry['path'].name}: duplicate owned section(s): {dups}. "
+            "Edit the note so each appears once; it stays excluded from sync."
+        )
+
+    seen: set[str] = set()
+    for view in state.topic_views:
+        seen.add(view.id)
+        parsed = vault_views.get(view.id)
+        record = sync_state.records.get(view.id)
+        file_content = _read_text(parsed.path) if parsed is not None else None
+        decision = _decision_for(view, parsed, record, file_content)
+        if decision is not None:
+            plan.decisions.append(decision)
+
+    for key, parsed in vault_views.items():
+        if key in seen or key.startswith("path:") and _decision_key(None, parsed) in seen:
+            continue
+        record = sync_state.records.get(key)
+        decision = _decision_for(None, parsed, record, _read_text(parsed.path) or "")
+        if decision is not None:
+            plan.decisions.append(decision)
+    return plan
+
+
+def apply_sync_plan(
+    state: AppState,
+    decisions: list[SyncDecision],
+    choices: dict[str, str],
+    folder: Path | None = None,
+) -> SyncResult:
+    """Execute only the approved subset: choices maps decision.key to 'app'
+    (export) or 'vault' (import); missing/'skip' entries stay untouched.
+    Each chosen note is re-read and compared with its plan-time hash, so files
+    that changed since review are skipped with a warning, never clobbered."""
+    result = SyncResult()
+    planned = {d.key: d for d in decisions}
+    wanted = {k: s for k, s in choices.items() if s in ("app", "vault") and k in planned}
+    if not wanted:
+        return result
+
+    sync_state = load_sync_state()
+    folder = _resolve_folder(folder)
+    if folder is None or not sync_state.enabled:
+        result.errors.append("Obsidian sync is not configured or is disabled.")
+        return result
+    if not _migration_gate(sync_state, folder, result):
+        return result
+    if not folder.exists():
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            result.errors.append(f"Could not create sync folder: {exc}")
+            return result
+
+    vault_views, occupied, scan_warnings, unsafe_notes = _scan_vault(
+        folder, sync_state.records, write_back=False
+    )
+    result.warnings.extend(scan_warnings)
+    blocked_ids = {u["view_id"] for u in unsafe_notes if u["view_id"]}
+
+    for key, side in wanted.items():
+        decision = planned[key]
+        view = next((v for v in state.topic_views if v.id == decision.view_id), None)
+        parsed = vault_views.get(key)
+
+        file_text: str | None
+        if parsed is not None:
+            file_text = _read_text(parsed.path)
+        elif key.startswith("path:"):
+            orphan_path = folder / key[5:]
+            file_text = _read_text(orphan_path)
+            if file_text is not None:
+                try:
+                    parsed = parse_topic_view(file_text, orphan_path)
+                except ValueError:
+                    parsed = None
+        else:
+            file_text = None
+
+        if side == "app" and view is None:
+            result.warnings.append(f"'{decision.name}': no app version to keep; skipped.")
+            continue
+        if side == "vault" and parsed is None:
+            result.warnings.append(f"'{decision.name}': Obsidian note unavailable; skipped.")
+            continue
+        if decision.view_id and decision.view_id in blocked_ids:
+            result.errors.append(
+                f"'{decision.name}': note still has duplicate owned sections; fix it first."
+            )
+            continue
+
+        # Data-loss guard: skip (with a warning) any note whose bytes changed since review.
+        if file_text is not None:
+            if not decision.vault_hash or topic_view_content_hash(file_text) != decision.vault_hash:
+                result.warnings.append(
+                    f"'{decision.name}' changed since review; skipped. Run Review & Sync again."
+                )
+                continue
+        elif decision.vault_hash:
+            result.warnings.append(
+                f"'{decision.name}': Obsidian note disappeared since review; skipped."
+            )
+            continue
+
+        if side == "app":
+            target, written, errors, warnings = _export_note(
+                folder, view, parsed, occupied, sync_state.records.get(view.id)
+            )
+            result.errors.extend(errors)
+            result.warnings.extend(warnings)
+            if written is None:
+                continue
+            result.exported.append(view.name)
+            _update_record(sync_state, view, target.name, written)
+            continue
+
+        file_path = parsed.path
+        if view is None:
+            target_view = parsed.view
+            state.topic_views.append(target_view)
+            result.created.append(target_view.name)
+        else:
+            _apply_vault_to_view(view, parsed)
+            target_view = view
+            result.imported.append(target_view.name)
+        try:
+            write_topic_view(target_view, file_path, prior=parsed)
+            written = _read_text(file_path)
+        except OSError as exc:
+            result.errors.append(f"Could not normalize {file_path.name}: {exc}")
+            written = _read_text(file_path)
+        if written is None:
+            result.errors.append(f"Could not read back {file_path.name}.")
+            continue
+        occupied[file_path.name.lower()] = target_view.id
+        _update_record(sync_state, target_view, file_path.name, written)
 
     save_sync_state(sync_state)
     return result

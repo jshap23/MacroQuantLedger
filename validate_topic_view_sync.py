@@ -17,6 +17,8 @@ from storage.topic_view_markdown import note_filename, parse_topic_view, render_
 from storage.topic_view_sync import (
     SyncRecord,
     SyncState,
+    apply_sync_plan,
+    plan_sync,
     resolve_conflict,
     set_sync_enabled,
     sync_topic_views,
@@ -699,6 +701,211 @@ def test_missing_file_keep_vault_reports_error() -> None:
         print("PASS: missing file keep-vault reports error instead of silent no-op")
 
 
+def test_plan_export_requires_explicit_approval() -> None:
+    tmp_state = _temp_state_file()
+    _patch_state_file(tmp_state)
+    set_sync_enabled(True)
+
+    with tempfile.TemporaryDirectory() as vault:
+        vault_path = Path(vault)
+        view = _make_view()
+        state = AppState(topic_views=[view])
+        sync_topic_views(state, vault_path)
+
+        state.topic_views[0].bottom_line = "App-side edit."
+        state.topic_views[0].updated_at = _now_utc()
+
+        plan = plan_sync(state, vault_path)
+        assert not plan.errors and not plan.warnings
+        assert len(plan.decisions) == 1
+        decision = plan.decisions[0]
+        assert decision.action == "EXPORT"
+        assert decision.key == view.id and decision.view_id == view.id
+        assert decision.app_bottom_line == "App-side edit."
+
+        note = vault_path / "US Labor.md"
+        untouched = apply_sync_plan(state, plan.decisions, {}, vault_path)
+        assert not any([untouched.exported, untouched.imported, untouched.created])
+        assert "App-side edit." not in note.read_text(encoding="utf-8")
+
+        applied = apply_sync_plan(state, plan.decisions, {view.id: "app"}, vault_path)
+        assert applied.exported == [view.name]
+        assert "App-side edit." in note.read_text(encoding="utf-8")
+
+        follow_up = plan_sync(state, vault_path)
+        assert follow_up.decisions == []
+    print("PASS: review flow — export listed, applied only after explicit choice")
+
+
+def test_plan_import_and_hash_guard_skips_changed_files() -> None:
+    tmp_state = _temp_state_file()
+    _patch_state_file(tmp_state)
+    set_sync_enabled(True)
+
+    with tempfile.TemporaryDirectory() as vault:
+        vault_path = Path(vault)
+        view = _make_view()
+        state = AppState(topic_views=[view])
+        sync_topic_views(state, vault_path)
+
+        note = vault_path / "US Labor.md"
+        original_bottom = view.bottom_line
+        note.write_text(
+            note.read_text(encoding="utf-8").replace(original_bottom, "Vault change."),
+            encoding="utf-8",
+        )
+
+        plan = plan_sync(state, vault_path)
+        assert len(plan.decisions) == 1 and plan.decisions[0].action == "IMPORT"
+        assert plan.decisions[0].vault_bottom_line == "Vault change."
+
+        note.write_text(
+            note.read_text(encoding="utf-8").replace("Vault change.", "Vault change v2."),
+            encoding="utf-8",
+        )
+        guarded = apply_sync_plan(state, plan.decisions, {view.id: "vault"}, vault_path)
+        assert not guarded.imported
+        assert any("changed since review" in w for w in guarded.warnings)
+        assert state.topic_views[0].bottom_line != "Vault change v2."
+
+        fresh_plan = plan_sync(state, vault_path)
+        result = apply_sync_plan(state, fresh_plan.decisions, {view.id: "vault"}, vault_path)
+        assert result.imported == [view.name]
+        assert state.topic_views[0].bottom_line == "Vault change v2."
+    print("PASS: import applies on approval; files changed since review are skipped")
+
+
+def test_plan_conflict_decision_resolves_by_chosen_side() -> None:
+    tmp_state = _temp_state_file()
+    _patch_state_file(tmp_state)
+    set_sync_enabled(True)
+
+    with tempfile.TemporaryDirectory() as vault:
+        vault_path = Path(vault)
+        view = _make_view()
+        state = AppState(topic_views=[view])
+        sync_topic_views(state, vault_path)
+
+        original_bottom = view.bottom_line
+        state.topic_views[0].bottom_line = "App change."
+        state.topic_views[0].updated_at = _now_utc()
+        note = vault_path / "US Labor.md"
+        note.write_text(
+            note.read_text(encoding="utf-8").replace(original_bottom, "Vault change."),
+            encoding="utf-8",
+        )
+
+        plan = plan_sync(state, vault_path)
+        assert len(plan.decisions) == 1
+        decision = plan.decisions[0]
+        assert decision.action == "CONFLICT"
+
+        kept_app = apply_sync_plan(state, plan.decisions, {view.id: "app"}, vault_path)
+        assert kept_app.exported == [view.name]
+        assert state.topic_views[0].bottom_line == "App change."
+        assert plan_sync(state, vault_path).decisions == []
+
+        state.topic_views[0].bottom_line = "App change 2."
+        state.topic_views[0].updated_at = _now_utc()
+        note.write_text(
+            note.read_text(encoding="utf-8").replace("App change.", "Vault change 2."),
+            encoding="utf-8",
+        )
+        second = plan_sync(state, vault_path)
+        assert second.decisions[0].action == "CONFLICT"
+        kept_vault = apply_sync_plan(state, second.decisions, {view.id: "vault"}, vault_path)
+        assert kept_vault.imported == [view.name]
+        assert state.topic_views[0].bottom_line == "Vault change 2."
+        assert plan_sync(state, vault_path).decisions == []
+    print("PASS: conflict decisions resolve by the chosen side and stay resolved")
+
+
+def test_plan_create_from_vault_only_note() -> None:
+    tmp_state = _temp_state_file()
+    _patch_state_file(tmp_state)
+    set_sync_enabled(True)
+
+    with tempfile.TemporaryDirectory() as vault:
+        vault_path = Path(vault)
+        state = AppState(topic_views=[])
+        (vault_path / "Fresh Note.md").write_text(
+            "---\n"
+            "view_id: fresh-note-1\n"
+            "title: Fresh Note\n"
+            "status: ready\n"
+            "---\n"
+            "\n"
+            "# Fresh Note\n"
+            "\n"
+            "## My View\n"
+            "\n"
+            "Brand new from the vault.\n"
+            "\n"
+            "## Why\n"
+            "\n"
+            "1. Only exists in Obsidian.\n",
+            encoding="utf-8",
+        )
+
+        plan = plan_sync(state, vault_path)
+        creates = [d for d in plan.decisions if d.action == "CREATE"]
+        assert len(creates) == 1
+        assert creates[0].key == "fresh-note-1" and creates[0].view_id == "fresh-note-1"
+
+        skipped = apply_sync_plan(state, plan.decisions, {}, vault_path)
+        assert not skipped.created
+        assert len(state.topic_views) == 0
+
+        imported = apply_sync_plan(state, plan.decisions, {"fresh-note-1": "vault"}, vault_path)
+        assert imported.created == ["Fresh Note"]
+        assert any(v.id == "fresh-note-1" for v in state.topic_views)
+        assert plan_sync(state, vault_path).decisions == []
+    print("PASS: vault-only notes are CREATE decisions, imported only on approval")
+
+
+def test_plan_idless_note_uses_path_key_without_touching_the_file() -> None:
+    tmp_state = _temp_state_file()
+    _patch_state_file(tmp_state)
+    set_sync_enabled(True)
+
+    with tempfile.TemporaryDirectory() as vault:
+        vault_path = Path(vault)
+        state = AppState(topic_views=[])
+        orphan = vault_path / "Orphan.md"
+        original_text = "# Orphan\n\n## My View\n\nNo id yet.\n"
+        orphan.write_text(original_text, encoding="utf-8")
+
+        plan = plan_sync(state, vault_path)
+        creates = [d for d in plan.decisions if d.action == "CREATE"]
+        assert len(creates) == 1
+        assert creates[0].key.startswith("path:")
+        assert creates[0].filename == "Orphan.md"
+        assert orphan.read_text(encoding="utf-8") == original_text
+
+        result = apply_sync_plan(state, plan.decisions, {creates[0].key: "vault"}, vault_path)
+        assert result.created == ["Orphan"]
+        adopted = orphan.read_text(encoding="utf-8")
+        assert "view_id:" in adopted
+        assert any(v.id == state.topic_views[0].id for v in state.topic_views)
+        assert plan_sync(state, vault_path).decisions == []
+    print("PASS: id-less notes planned under path keys; file touched only when approved")
+
+
+def test_disabled_sync_yields_empty_plan() -> None:
+    tmp_state = _temp_state_file()
+    _patch_state_file(tmp_state)
+    set_sync_enabled(False)
+
+    with tempfile.TemporaryDirectory() as vault:
+        vault_path = Path(vault)
+        state = AppState(topic_views=[_make_view()])
+        plan = plan_sync(state, vault_path)
+        assert plan.decisions == [] and not plan.errors
+        result = apply_sync_plan(state, [], {}, vault_path)
+        assert not result.errors
+    print("PASS: disabled sync yields an empty plan and no-op apply")
+
+
 def main() -> None:
     print("Validating TopicView <-> Obsidian Markdown sync...\n")
     test_parse()
@@ -720,6 +927,12 @@ def main() -> None:
     test_duplicate_titles_get_distinct_files()
     test_keep_vault_with_friendly_filename()
     test_missing_file_keep_vault_reports_error()
+    test_plan_export_requires_explicit_approval()
+    test_plan_import_and_hash_guard_skips_changed_files()
+    test_plan_conflict_decision_resolves_by_chosen_side()
+    test_plan_create_from_vault_only_note()
+    test_plan_idless_note_uses_path_key_without_touching_the_file()
+    test_disabled_sync_yields_empty_plan()
     print("\nAll validation scenarios passed.")
 
 
