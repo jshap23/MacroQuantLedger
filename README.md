@@ -30,6 +30,8 @@ Opens at `http://localhost:8080` by default.
 
 ## Local settings
 
-Use **··· → Settings** in the app to configure the Obsidian export folder.
-The value is stored in `data/user_settings.json` and can be overridden with
-the `OBSIDIAN_EXPORT_PATH` environment variable.
+Use **··· → Settings** in the app to configure the Obsidian export folder,
+the LLM provider (OpenRouter or OpenCode Go), and per-provider API keys and
+models. Values are stored in `data/user_settings.json` (gitignored) and can be
+overridden with environment variables such as `OPENROUTER_API_KEY`,
+`OPENCODE_API_KEY`, and `MQLEDGER_LLM_PROVIDER`.

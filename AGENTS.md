@@ -73,8 +73,9 @@ All component CSS must follow this pattern. Current IDs in use:
    - **Assets** — 13 asset scores (1-5) with tenure tracking
    - **Trades** — ETF position tracker with P&L
 3. **Research**
-   - **Briefing** — LLM-generated morning brief or template view
    - **Economic Data** — FRED indicators with charts (requires `FRED_API_KEY`)
+   - **Fed Watch** — FOMC statements, minutes, and speeches reader with LLM summaries
+   - **Papers** — Research paper feed (FEDS, FEDS Notes, IFDP, arXiv q-fin) with read tracking
 4. **Review**
    - **Weekly Review** — Time allocation and synthesis log
    - **Attribution** — View-vs-returns analysis with echarts
@@ -92,18 +93,20 @@ All component CSS must follow this pattern. Current IDs in use:
 | Module | Role |
 |---|---|
 | `app.py` | Entry point, MQ monogram header, global CSS theming (dark/light), 5-tab + secondary-tab routing, import/export/reset/settings dialogs |
-| `config.py` | OpenRouter defaults — base URL, default model slug, max tokens, temperature; plus `OBSIDIAN_EXPORT_PATH_DEFAULT`, `OBSIDIAN_VIEWS_FOLDER_DEFAULT`, and interview fallback notes |
+| `config.py` | LLM provider defaults (OpenRouter and OpenCode Go), base URLs, model slugs, max tokens, temperature; plus Obsidian default paths and interview fallback notes |
 | `models/schema.py` | Pydantic v2 models: `AppState`, `MacroView`, `AssetView`, `Reconciliation`, `BriefingStrip`, `Trade`, plus `TopicView`, `ViewPoint`, `ViewFact`, `ViewPracticeMeta` |
 | `models/interview.py` | Interview-practice models: `InterviewSession`, `InterviewQuestion`, `InterviewAnswer`, `InterviewPostmortem`, `InterviewDatabase` |
 | `storage/persistence.py` | `load_state()` / `save_state()` — JSON persistence; daily snapshots; schema migration |
-| `storage/user_settings.py` | `data/user_settings.json` persistence (Obsidian export path and Obsidian Views folder) |
+| `storage/user_settings.py` | `data/user_settings.json` persistence (Obsidian export path, Obsidian Views folder, LLM provider, API keys, and models) |
 | `storage/interview_store.py` | `data/interview_history.json` persistence + performance summary |
 | `storage/fred_client.py` | FRED API client — ~50 macro indicators; ETF data via yfinance |
+| `storage/fed_client.py` | Federal Reserve communications — FOMC statements/minutes/speeches listings, `#article` text extraction, permanent body cache |
+| `storage/research_feeds.py` | Paper feed aggregator (FEDS, FEDS Notes, IFDP, arXiv q-fin) + `data/research_feed.json` read-state persistence |
 | `storage/trade_prices.py` | yfinance price history — both raw close and adj close per ticker |
 | `services/talking_points.py` | Pure synthesis — `macro_prose()`, `fred_snippet()`, `asset_verbal()` |
-| `services/llm_polish.py` | OpenRouter chat — briefing generation, polish, and disk cache |
+| `services/llm_polish.py` | OpenRouter chat — briefing generation, polish, document summaries (`summarize()`), and disk cache |
 | `services/attribution.py` | View-vs-returns engine — asset benchmark mapping (`ASSET_BENCH`), macro benchmark mapping (`MACRO_BENCH`), score timeline, hit-rate calculation |
-| `services/topic_views.py` | TopicView AI helpers — `structure_notes()`, `improve_flow()`, `challenge_view()`, `views_context()` |
+| `services/topic_views.py` | TopicView AI helpers — `challenge_view()`, `views_context()` (note-structuring LLM helper removed) |
 | `storage/topic_view_markdown.py` | TopicView Markdown parser/renderer for Obsidian sync |
 | `storage/topic_view_sync.py` | TopicView <-> Obsidian Views folder sync engine and `data/topic_view_sync.json` persistence |
 | `services/interview_llm.py` | Provider-neutral LLM client for interview practice |
@@ -121,6 +124,8 @@ All component CSS must follow this pattern. Current IDs in use:
 | `components/briefing.py` | Morning Briefing tab — LLM generation or template fallback |
 | `components/reconciliation.py` | Weekly reconciliation form + history log (capped at 52) + quant focus inputs |
 | `components/fred_panel.py` | FRED economic data — HTML tables with click-to-chart (echarts) |
+| `components/fed_watch.py` | Fed Watch tab — two-pane reader for statements/minutes/speeches, LLM summary button |
+| `components/research_feed.py` | Papers tab — merged feed list, unread/all filter, mark-read state |
 | `components/trades.py` | Trade Tracker tab — add/close/delete ETF positions, price return vs total return |
 | `components/attribution.py` | Attribution tab — echarts timeline, score analysis, streak badges |
 | `components/interview_practice.py` | Practice tab UI — setup, sparring loop, postmortem, performance stats |
@@ -181,7 +186,8 @@ All component CSS must follow this pattern. Current IDs in use:
 - **Attribution** — `ASSET_BENCH` maps asset views to ETFs; `MACRO_BENCH` maps macro views to FRED indicators. Timeline walks daily snapshots to find score change dates. Echarts shows price + score overlay.
 - **Persistence** — JSON only. No database. Every edit calls `save_state()`.
 - **Snapshots** — One per calendar day at `data/snapshots/`. Used for conviction tenure and attribution calculation.
-- **LLM Cache** — `data/briefing_cache.json` keyed by (base URL + model + content hash).
+- **LLM Cache** — `data/briefing_cache.json` keyed by (base URL + model + content hash); document summaries share it via a `"SUMMARY::"` digest prefix.
+- **Fed doc bodies never change once published** — `fed_client.document_body()` caches them permanently to `data/fed_cache/<hash>.txt`; only the RSS listings re-fetch.
 - **Schema Migration** — `persistence.py` `_migrate()` handles old `state.json` gracefully, seeds `topic_views_version`, and migrates legacy asset directions to 1-5 scores.
 - **Interview History** — Practice sessions are persisted separately in `data/interview_history.json`.
 
@@ -204,7 +210,8 @@ My Views can optionally sync bidirectionally with a dedicated Obsidian Views fol
 - **JSON persistence remains authoritative** — `data/state.json` is still the source of truth for overall `AppState`. Obsidian is an optional external representation.
 - **Conflict behavior** — When both the app and a vault note change since the last sync, the View is marked as conflicting. No side is overwritten automatically; the user chooses **Keep App**, **Keep Vault**, or dismisses.
 - **Deletion safety** — The sync engine never automatically deletes an app View or an Obsidian file. Missing files or deleted app Views are surfaced as conflicts or left untouched.
-- **Sync triggers** — Sync runs when the My Views tab opens, when the user clicks **Sync Views**, and after saving a View in the app.
+- **Sync triggers** — Sync is fully manual: it runs only when the user clicks **Review & Sync…**, which opens a diff-selection dialog (via `plan_sync()` / `apply_sync_plan()` in `storage/topic_view_sync.py`). Nothing syncs on tab open or after saving; every EXPORT/IMPORT/CREATE requires an explicit per-View "Use App" / "Use Obsidian" choice, and notes whose bytes changed since the plan was built are skipped with a warning instead of written.
+- **View editor apply model** — The TopicView editor edits a deep-copied draft; nothing persists until **Apply Changes** (sticky bar at the top lists exactly which fields changed). Discard reverts the draft; leaving the editor with unsaved changes prompts first. Overview-level actions (new/delete/reorder topic) still persist immediately since each is itself an explicit click. Archiving lives only at the bottom of the View editor behind a confirm dialog (blocked while the draft has unsaved edits); restoring happens via a Restore button on cards in the Archived expansion — there is no one-click archive on active cards.
 - **Sync state** — Lightweight sync metadata (content hashes, `updated_at`, conflict status) is stored in `data/topic_view_sync.json`, not inside the user's Markdown notes.
 
 ### Environment Variables
@@ -212,14 +219,21 @@ My Views can optionally sync bidirectionally with a dedicated Obsidian Views fol
 | Variable | Required | Purpose |
 |---|---|---|
 | `FRED_API_KEY` | Optional | FRED macro indicator data (panel hidden if absent) |
-| `OPENROUTER_API_KEY` | Optional | LLM polish generation for TopicViews |
+| `OPENROUTER_API_KEY` | Optional | LLM API key when provider is OpenRouter |
 | `OPENROUTER_BASE_URL` | Optional | OpenRouter-compatible endpoint override |
-| `OPENROUTER_MODEL` | Optional | Default chat model override |
-| `OPENROUTER_POLISH_MODEL` | Optional | Polish-specific model |
+| `OPENROUTER_MODEL` | Optional | Default chat model override for OpenRouter |
+| `OPENROUTER_POLISH_MODEL` | Optional | Polish-specific model for OpenRouter |
+| `OPENROUTER_RESEARCH_MODEL` | Optional | Research-summary model for OpenRouter |
 | `OPENROUTER_MAX_TOKENS_POLISH` | Optional | Polish token limit |
 | `OPENROUTER_TEMPERATURE` | Optional | Sampling temperature |
 | `OPENROUTER_HTTP_REFERER` | Optional | OpenRouter HTTP referer header |
 | `OPENROUTER_APP_NAME` | Optional | OpenRouter app name header |
+| `OPENCODE_API_KEY` | Optional | LLM API key when provider is OpenCode Go |
+| `OPENCODE_BASE_URL` | Optional | OpenCode Go endpoint override |
+| `OPENCODE_MODEL` | Optional | Default chat model override for OpenCode Go |
+| `OPENCODE_POLISH_MODEL` | Optional | Polish-specific model for OpenCode Go |
+| `OPENCODE_RESEARCH_MODEL` | Optional | Research-summary model for OpenCode Go |
+| `MQLEDGER_LLM_PROVIDER` | Optional | `openrouter` (default) or `opencode_go`; overrides Settings |
 | `OBSIDIAN_EXPORT_PATH` | Optional | Override Obsidian export folder |
 | `OBSIDIAN_VIEWS_FOLDER` | Optional | Override Obsidian Views folder for bidirectional My Views sync |
 | `MQLEDGER_PORT` | Optional | App port (default `8080`) |
@@ -240,6 +254,8 @@ data/
 ├── user_settings.json      # Obsidian export path + Obsidian Views folder + app settings (gitignored)
 ├── interview_history.json  # Interview practice history (gitignored)
 ├── topic_view_sync.json    # Obsidian View sync state: hashes, timestamps, conflicts (gitignored)
+├── research_feed.json      # Paper feed items + read/unread state (gitignored)
+├── fed_cache/              # Cached full text of Fed statements/minutes/speeches (gitignored)
 ├── snapshots/
 │   └── state_YYYY-MM-DD.json  # One snapshot per calendar day (gitignored)
 ├── models/
@@ -258,5 +274,5 @@ data/
 ### Documentation Notes
 
 - **`CLAUDE.md` is now stale.** It still describes a 6-tab layout, 15 asset views, a hardcoded Obsidian path, and `SPEC.md` as authoritative. Do not trust it for current structure.
-- **`check_syntax.py` checks 38 files** (previously 37).
+- **`check_syntax.py` checks 41 files** (38 before the Fed Watch / Papers tabs were added).
 - **Trust actual source code** over any markdown documentation.
