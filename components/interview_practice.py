@@ -245,10 +245,17 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
         ui.label(preset.description).classes("interview-meta")
         if style == "Deliver" and len(views) > 1:
             ui.label("Mixed Deliver sessions move between selected Views; each answer is evaluated semantically, not word-for-word.").classes("interview-meta")
+        default_model = preferred_model() or interview_model()
+        model = ui.select(
+            list(dict.fromkeys([default_model, *selectable_models()])),
+            value=default_model, label="AI Model",
+        ).classes("dark-input").style("min-width:260px;margin-top:.6rem")
         status = ui.label("").style("color:#f87171;font-size:.75rem;min-height:1rem;margin-top:.6rem")
         async def start():
-            if not llm_available(): status.set_text("Set OPENROUTER_API_KEY or INTERVIEW_API_KEY, then restart the app."); return
+            if not llm_available(): status.set_text("Configure an LLM provider and API key in Settings, then restart the app."); return
             button.disable(); button.set_text("Preparing…")
+            chosen_model = model.value or interview_model()
+            save_preferred_model(chosen_model)
             try:
                 session = await run.io_bound(lambda: start_session(
                     mode=preset.mode, preset_key=preset.key,
@@ -256,7 +263,7 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
                     materials="", view_ids=[view.id for view in views],
                     practice_style=style, view_context=views_context(views),
                     target_questions=(len(views) if style == "Deliver" else preset.default_questions),
-                    model=preferred_model() or interview_model(),
+                    model=chosen_model,
                 ))
             except Exception as exc:
                 status.set_text(f"Could not start: {exc}"); button.enable(); button.set_text("Begin"); return
@@ -333,7 +340,7 @@ def _render_setup(state: dict, refresh) -> None:
 
         async def start() -> None:
             if not llm_available():
-                status.set_text("Set OPENROUTER_API_KEY or INTERVIEW_API_KEY, then restart the app.")
+                status.set_text("Configure an LLM provider and API key in Settings, then restart the app.")
                 return
             count = int(question_count.value or preset.default_questions)
             chosen_model = model.value or interview_model()

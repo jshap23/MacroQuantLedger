@@ -1,21 +1,40 @@
 from __future__ import annotations
 import asyncio
 import os
-from nicegui import ui, app as ni_app
+from nicegui import ui, run, app as ni_app
 from storage.persistence import load_state, save_state, import_state, STATE_FILE
 from components.status_bar import render_status_bar
 from components.macro_views import render_macro_views
 from components.reconciliation import render_reconciliation
 from components.asset_views import render_asset_views
 from components.fred_panel import render_fred_panel
+from components.fed_watch import render_fed_watch
+from components.research_feed import render_research_feed
 from components.trades import render_trades
 from components.attribution import render_attribution
 from components.interview_practice import render_interview_practice
 from components.topic_views import render_topic_views
 from components.today import render_today
 from export.excel import generate_excel
-from storage.user_settings import obsidian_export_path, save_obsidian_export_path, obsidian_views_folder, save_obsidian_views_folder
+from storage.user_settings import (
+    load_user_settings,
+    obsidian_export_path,
+    save_obsidian_export_path,
+    obsidian_views_folder,
+    save_obsidian_views_folder,
+    llm_provider,
+    save_llm_provider,
+    llm_api_key,
+    save_llm_api_key,
+    llm_base_url,
+    llm_model,
+    save_llm_model,
+    research_summary_model,
+    save_research_summary_model,
+)
 from storage.topic_view_sync import sync_is_enabled, set_sync_enabled
+import config as app_config
+from services import llm_polish
 from services.interview_llm import available as interview_llm_available
 from services.interview_speech import register_interview_speech_routes
 
@@ -637,6 +656,7 @@ def index():
         if opener:
             opener(view_ids, style)
         navigate("practice")
+        ui.run_javascript("window.scrollTo({top:0,behavior:'smooth'})")
 
     def review_view(view_id):
         opener = views_bridge.get("open")
@@ -703,18 +723,20 @@ def index():
                     )
                     ui.label(
                         "Obsidian export writes notes one-way. Obsidian Views sync is a separate, "
-                        "optional bidirectional folder for My Views. Settings are stored locally in "
-                        "data/user_settings.json."
+                        "optional bidirectional folder for My Views. LLM provider and API keys are "
+                        "stored locally in data/user_settings.json (gitignored)."
                     ).style(
                         "color:var(--text-muted); font-size:0.78rem; line-height:1.55; margin-bottom:0.8rem;"
                     )
                     ui.label("INTEGRATIONS").classes("field-label")
                     with ui.row().style("gap:0.55rem;flex-wrap:wrap;margin-bottom:0.8rem;"):
-                        interview_ready = interview_llm_available()
+                        current_provider = llm_provider()
+                        provider_label = "OpenRouter" if current_provider == app_config.LLM_PROVIDER_OPENROUTER else "OpenCode Go"
+                        llm_ready = bool(llm_api_key(current_provider))
                         ui.label(
-                            f"Interview API · {'ready' if interview_ready else 'key missing'}"
+                            f"{provider_label} · {'ready' if llm_ready else 'key missing'}"
                         ).style(
-                            f"color:{'#4ade80' if interview_ready else '#f59e0b'};font-size:0.7rem;"
+                            f"color:{'#4ade80' if llm_ready else '#f59e0b'};font-size:0.7rem;"
                             "border:1px solid var(--border);border-radius:4px;padding:3px 7px;"
                         )
                         fred_ready = bool((os.environ.get("FRED_API_KEY") or "").strip())
@@ -740,6 +762,107 @@ def index():
                         "Enable bidirectional My Views sync",
                         value=sync_is_enabled(),
                     ).style("margin-top:0.5rem")
+
+
+                    def _refresh_provider_inputs():
+                        p = provider_select.value
+                        is_or = p == app_config.LLM_PROVIDER_OPENROUTER
+                        or_key_input.set_visibility(is_or)
+                        og_key_input.set_visibility(not is_or)
+                        or_model_input.set_visibility(is_or)
+                        og_model_input.set_visibility(not is_or)
+
+                    ui.label("LLM PROVIDER").classes("field-label").style("margin-top:0.9rem")
+                    provider_select = ui.select(
+                        {
+                            app_config.LLM_PROVIDER_OPENROUTER: "OpenRouter",
+                            app_config.LLM_PROVIDER_OPENCODE_GO: "OpenCode Go",
+                        },
+                        label="Provider",
+                        value=llm_provider(),
+                    ).classes("w-full dark-input")
+                    provider_select.on("update:model-value", lambda _: _refresh_provider_inputs())
+
+                    or_key_input = ui.input(
+                        value=load_user_settings().get("openrouter_api_key") or "",
+                        label="OpenRouter API key",
+                        placeholder="sk-or-...",
+                        password=True,
+                        password_toggle_button=True,
+                    ).classes("w-full dark-input").style("margin-top:0.5rem")
+                    og_key_input = ui.input(
+                        value=load_user_settings().get("opencode_go_api_key") or "",
+                        label="OpenCode Go API key",
+                        placeholder="opencode-...",
+                        password=True,
+                        password_toggle_button=True,
+                    ).classes("w-full dark-input").style("margin-top:0.5rem")
+
+                    or_model_input = ui.input(
+                        value=load_user_settings().get("openrouter_model") or "",
+                        label="OpenRouter model",
+                        placeholder=f"default: {app_config.OPENROUTER_MODEL_DEFAULT}",
+                    ).classes("w-full dark-input").style("margin-top:0.5rem")
+                    og_model_input = ui.input(
+                        value=load_user_settings().get("opencode_go_model") or "",
+                        label="OpenCode Go model",
+                        placeholder=f"default: {app_config.OPENCODE_GO_MODEL_DEFAULT}",
+                    ).classes("w-full dark-input").style("margin-top:0.5rem")
+
+                    test_status = ui.label("").style(
+                        "font-size:0.72rem; color:var(--text-muted); min-height:1rem; margin-top:0.4rem;"
+                    )
+
+                    async def _test_llm():
+                        from openai import OpenAI
+                        p = provider_select.value
+                        key = llm_api_key(p)
+                        if not key:
+                            test_status.set_text(f"{p} API key is empty.")
+                            test_status.style("color:#f59e0b")
+                            return
+                        try:
+                            client = OpenAI(api_key=key, base_url=llm_base_url(p))
+                            model = or_model_input.value if p == app_config.LLM_PROVIDER_OPENROUTER else og_model_input.value
+                            model = model or llm_model(p)
+                            resp = await run.io_bound(
+                                client.chat.completions.create,
+                                model=model,
+                                messages=[{"role": "user", "content": "Say OK"}],
+                                max_tokens=5,
+                            )
+                            text = resp.choices[0].message.content or ""
+                            test_status.set_text(f"Connected — model replied: {text.strip()[:40]}")
+                            test_status.style("color:#4ade80")
+                        except Exception as exc:
+                            test_status.set_text(f"Connection failed: {exc}"[:200])
+                            test_status.style("color:#f87171")
+
+                    ui.button("Test LLM connection", on_click=_test_llm).props("flat dense no-caps").style(
+                        "color:var(--accent); font-size:0.72rem; margin-top:0.3rem;"
+                    )
+
+                    _refresh_provider_inputs()
+                    prov = llm_polish.paper_provenance()
+                    ui.label("AI SUMMARIES (PAPERS TAB)").classes("field-label").style("margin-top:0.9rem")
+                    override = research_summary_model()
+                    resolved = override or app_config.OPENROUTER_MODEL_DEFAULT
+                    source_note = "settings override" if override else "default"
+                    ui.label(
+                        f"Key takeaways call {resolved} at {prov['endpoint']} ({source_note}). "
+                        "Every generated summary shows this on screen."
+                    ).style(
+                        "color:var(--text-muted); font-size:0.74rem; line-height:1.5; margin-bottom:0.4rem;"
+                    )
+                    summary_model_input = ui.input(
+                        value=override,
+                        label="Research summary model",
+                        placeholder=f"default: {app_config.OPENROUTER_MODEL_DEFAULT}",
+                    ).classes("w-full dark-input").style("margin-top:0.2rem")
+                    summary_model_input.tooltip(
+                        "OpenRouter model slug, e.g. openai/gpt-4o-mini. Blank uses the default chain."
+                    )
+
                     settings_status = ui.label("").style(
                         "font-size:0.72rem; color:#f87171; min-height:1rem; margin-top:0.4rem;"
                     )
@@ -750,6 +873,13 @@ def index():
                             if views_folder_input.value:
                                 save_obsidian_views_folder(views_folder_input.value)
                             set_sync_enabled(sync_enabled.value)
+                            provider = provider_select.value or app_config.LLM_PROVIDER_DEFAULT
+                            save_llm_provider(provider)
+                            save_llm_api_key(app_config.LLM_PROVIDER_OPENROUTER, or_key_input.value or "")
+                            save_llm_api_key(app_config.LLM_PROVIDER_OPENCODE_GO, og_key_input.value or "")
+                            save_llm_model(app_config.LLM_PROVIDER_OPENROUTER, or_model_input.value or "")
+                            save_llm_model(app_config.LLM_PROVIDER_OPENCODE_GO, og_model_input.value or "")
+                            save_research_summary_model(summary_model_input.value or "")
                         except (ValueError, OSError) as exc:
                             settings_status.set_text(str(exc))
                             return
@@ -932,9 +1062,13 @@ def index():
         with ui.tab_panel(tab_research):
             with ui.tabs().props('align="left"').classes("secondary-tabs w-full") as research_tabs:
                 research_data = ui.tab("Economic Data")
+                research_fed = ui.tab("Fed Watch")
+                research_papers = ui.tab("Papers")
             navigation["secondary"]["research"] = research_tabs
             navigation["secondary"].update({
                 "data": research_data,
+                "fed_watch": research_fed,
+                "papers": research_papers,
             })
             with ui.tab_panels(research_tabs, value=research_data).classes("secondary-panels w-full"):
                 with ui.tab_panel(research_data):
@@ -946,6 +1080,10 @@ def index():
                                 "letter-spacing:0.08em; font-family:'IBM Plex Mono',monospace;"
                             )
                     fred_ref["container"] = _fred_c
+                with ui.tab_panel(research_fed):
+                    render_fed_watch()
+                with ui.tab_panel(research_papers):
+                    render_research_feed()
 
         with ui.tab_panel(tab_review):
             with ui.tabs().props('align="left"').classes("secondary-tabs w-full") as review_tabs:
