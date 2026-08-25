@@ -1,7 +1,7 @@
-"""Optional LLM polish for TopicViews via OpenRouter.
+"""Optional LLM polish for summaries and briefings.
 
-Requires OPENROUTER_API_KEY. Base URL, models, token limits, and temperature are
-set in config.py and overridden by environment variables (documented in CLAUDE.md).
+Supports OpenRouter and OpenCode Go. Provider, API key, base URL, and models are
+read from storage/user_settings.json with environment-variable overrides.
 """
 from __future__ import annotations
 import hashlib
@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 import config as app_config
+from storage import user_settings
 
 _log = logging.getLogger(__name__)
 
@@ -29,20 +30,20 @@ def _strip_env(name: str) -> str:
     return (os.environ.get(name) or "").strip()
 
 
-def _openrouter_api_key() -> str:
-    return _strip_env("OPENROUTER_API_KEY")
+def _provider() -> str:
+    return user_settings.llm_provider()
+
+
+def _api_key() -> str:
+    return user_settings.llm_api_key(_provider())
 
 
 def _base_url() -> str:
-    return _strip_env("OPENROUTER_BASE_URL") or app_config.OPENROUTER_BASE_URL_DEFAULT
+    return user_settings.llm_base_url(_provider())
 
 
-def _model_polish() -> str:
-    return (
-        _strip_env("OPENROUTER_POLISH_MODEL")
-        or _strip_env("OPENROUTER_MODEL")
-        or app_config.OPENROUTER_MODEL_DEFAULT
-    )
+def _model(purpose: str = "default") -> str:
+    return user_settings.llm_model(_provider(), purpose=purpose)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -74,7 +75,7 @@ def _temperature() -> float:
 
 
 def available() -> bool:
-    return bool(_openrouter_api_key())
+    return bool(_api_key())
 
 
 def _cache_digest(base_url: str, model: str, text: str) -> str:
@@ -97,7 +98,7 @@ def _write_cache(cache: dict) -> None:
         pass
 
 
-def _openrouter_client():
+def _llm_client():
     try:
         from openai import OpenAI
     except ImportError as e:
@@ -105,12 +106,14 @@ def _openrouter_client():
             "The `openai` package is not installed. Run: pip install openai"
         ) from e
 
-    key = _openrouter_api_key()
+    provider = _provider()
+    key = _api_key()
     base = _base_url()
     headers: dict[str, str] = {}
-    referer = _strip_env("OPENROUTER_HTTP_REFERER")
-    if referer:
-        headers["HTTP-Referer"] = referer
+    if provider == app_config.LLM_PROVIDER_OPENROUTER:
+        referer = _strip_env("OPENROUTER_HTTP_REFERER")
+        if referer:
+            headers["HTTP-Referer"] = referer
     headers["X-Title"] = _strip_env("OPENROUTER_APP_NAME") or "MacroQuantLedger"
     return OpenAI(api_key=key, base_url=base, default_headers=headers)
 
@@ -137,12 +140,13 @@ def _chat(
     user: str,
     max_tokens: int,
 ) -> tuple[str | None, str | None]:
+    provider_label = _provider_label()
     try:
-        client = _openrouter_client()
+        client = _llm_client()
     except ImportError as e:
         return None, str(e)
     except Exception as e:
-        return None, f"OpenRouter client init failed: {type(e).__name__}: {e}"[:800]
+        return None, f"{provider_label} client init failed: {type(e).__name__}: {e}"[:800]
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -155,10 +159,10 @@ def _chat(
         )
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
-        _log.warning("OpenRouter chat failed (model=%s): %s", model, err, exc_info=_log.isEnabledFor(logging.DEBUG))
+        _log.warning("%s chat failed (model=%s): %s", provider_label, model, err, exc_info=_log.isEnabledFor(logging.DEBUG))
         return None, err[:800]
     if not resp.choices:
-        return None, "OpenRouter returned no choices."
+        return None, f"{provider_label} returned no choices."
     msg = resp.choices[0].message
     text = _message_text(getattr(msg, "content", None))
     if not text:
@@ -172,13 +176,13 @@ def polish(text: str, force: bool = False) -> tuple[str | None, str | None]:
     Returns (polished_text, error_message). error_message is None on success.
     Pass force=True to bypass the cache and always call the API.
     """
-    if not _openrouter_api_key():
+    if not _api_key():
         return (
             None,
-            "OPENROUTER_API_KEY is empty for this Python process (set it before starting the app).",
+            f"{_provider_label()} API key is empty. Set it via environment variable or in Settings.",
         )
     base = _base_url()
-    model = _model_polish()
+    model = _model("polish")
     cache = _load_cache()
     k = _cache_digest(base, model, text)
     if not force and k in cache:
@@ -193,11 +197,126 @@ def polish(text: str, force: bool = False) -> tuple[str | None, str | None]:
 
 def get_cached(text: str) -> str | None:
     """Return cached polish for text, or None if not yet polished."""
-    if not _openrouter_api_key():
+    if not _api_key():
         return None
     base = _base_url()
-    model = _model_polish()
+    model = _model("polish")
     k = _cache_digest(base, model, text)
     return _load_cache().get(k)
+
+
+# ── Document summaries (Fed Watch tab) ────────────────────────────────────────
+
+_SUMMARY_SYSTEM = (
+    "You are a macro research analyst summarizing a Federal Reserve "
+    "communication for a portfolio manager who has not read it. Cover: the "
+    "policy stance and any change versus prior guidance, the 3-5 most "
+    "substantive points, notable language or tone shifts, and one closing "
+    "line on market implications. Plain prose, compact paragraphs or short "
+    "bullets. No preamble, no meta-commentary."
+)
+
+_SUMMARY_PREFIX = "SUMMARY::"
+_MAX_DOC_CHARS = 30000
+
+
+def _doc_key(text: str) -> tuple[str, str]:
+    base = _base_url()
+    model = _model("default")
+    trimmed = text.strip()[:_MAX_DOC_CHARS]
+    return _cache_digest(base, model, _SUMMARY_PREFIX + trimmed), trimmed
+
+
+def summarize(text: str, force: bool = False) -> tuple[str | None, str | None]:
+    """Synchronous. Call via run.io_bound from NiceGUI.
+
+    Returns (summary, error_message). Cached like polish(); force bypasses.
+    """
+    if not _api_key():
+        return (
+            None,
+            f"{_provider_label()} API key is empty. Set it via environment variable or in Settings.",
+        )
+    if not (text or "").strip():
+        return None, "No readable text available for this document."
+    key, trimmed = _doc_key(text)
+    cache = _load_cache()
+    if not force and key in cache:
+        return cache[key], None
+    result, err = _chat(_model("default"), _SUMMARY_SYSTEM, trimmed, max(900, _max_tokens_polish()))
+    if err or not result:
+        return None, err or "Unknown error"
+    cache[key] = result
+    _write_cache(cache)
+    return result, None
+
+
+def get_cached_summary(text: str) -> str | None:
+    """Return cached summary for document text, or None if not yet generated."""
+    if not _api_key() or not (text or "").strip():
+        return None
+    key, _ = _doc_key(text)
+    return _load_cache().get(key)
+
+
+# ── Research-paper key takeaways (Papers tab) ────────────────────────────────
+
+_PAPER_SYSTEM = (
+    "You are a macro research analyst screening an economics paper for a "
+    "portfolio manager. You are usually given only the title, authors, and "
+    "abstract — stay grounded in what is provided and never invent results, "
+    "data details, or conclusions. Return 3-5 short bullets: the core "
+    "finding; the data and method in one line; the implication for markets, "
+    "policy, or macro views; and one line on how much weight the finding "
+    "deserves and why. Start each bullet with '- '. No preamble, no closing."
+)
+
+_PAPER_PREFIX = "PAPER::"
+
+
+def paper_model() -> str:
+    return user_settings.research_summary_model() or _model("polish")
+
+
+def paper_endpoint() -> str:
+    from urllib.parse import urlsplit
+    base = _base_url()
+    try:
+        return urlsplit(base).netloc or base
+    except Exception:
+        return base
+
+
+def paper_provenance() -> dict[str, str]:
+    return {"model": paper_model(), "endpoint": paper_endpoint()}
+
+
+def _paper_key(text: str) -> tuple[str, str]:
+    trimmed = text.strip()[:_MAX_DOC_CHARS]
+    return (
+        _cache_digest(_base_url(), paper_model(), _PAPER_PREFIX + trimmed),
+        trimmed,
+    )
+
+
+def summarize_paper(text: str, force: bool = False) -> tuple[str | None, str | None]:
+    """Key takeaways for a paper. Synchronous; call via run.io_bound.
+
+    Returns (takeaways, error_message). Cached like summarize().
+    """
+    if not available():
+        return None, "LLM API key is not configured."
+    if not (text or "").strip():
+        return None, "No abstract available for this paper."
+    key, trimmed = _paper_key(text)
+    cache = _load_cache()
+    if not force and key in cache:
+        return cache[key], None
+    result, err = _chat(paper_model(), _PAPER_SYSTEM, trimmed, max(900, _max_tokens_polish()))
+    if err or not result:
+        return None, err or "Unknown error"
+    cache[key] = result
+    _write_cache(cache)
+    return result, None
 
 

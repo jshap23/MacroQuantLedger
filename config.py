@@ -5,6 +5,17 @@ OPENROUTER_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
 # Default model slug on OpenRouter; override with OPENROUTER_MODEL or per-task env vars
 OPENROUTER_MODEL_DEFAULT = "moonshotai/kimi-k2.6"
 
+# OpenCode Go — OpenAI-compatible subscription endpoint (https://opencode.ai/docs/go)
+OPENCODE_GO_BASE_URL_DEFAULT = "https://opencode.ai/zen/go/v1"
+# Default model ID on OpenCode Go; override with OPENCODE_MODEL or per-task env vars
+OPENCODE_GO_MODEL_DEFAULT = "deepseek-v4-flash"
+
+# Provider selection constants
+LLM_PROVIDER_OPENROUTER = "openrouter"
+LLM_PROVIDER_OPENCODE_GO = "opencode_go"
+# OpenRouter remains the out-of-the-box default; OpenCode Go is opt-in via Settings.
+LLM_PROVIDER_DEFAULT = LLM_PROVIDER_OPENROUTER
+
 OPENROUTER_MAX_TOKENS_POLISH = 600
 OPENROUTER_TEMPERATURE = 0.5
 
@@ -17,4 +28,4 @@ OBSIDIAN_EXPORT_PATH_DEFAULT = r"C:\Users\jshap\JS_Obsidian"
 OBSIDIAN_VIEWS_FOLDER_DEFAULT = r"C:\Users\jshap\JS_Obsidian\Views"
 
 # Interview practice may use INTERVIEW_MODEL / INTERVIEW_BASE_URL /
-# INTERVIEW_API_KEY. Each falls back to the existing OpenRouter configuration.
+# INTERVIEW_API_KEY. Each falls back to the active provider configuration.
