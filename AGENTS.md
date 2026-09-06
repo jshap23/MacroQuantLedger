@@ -79,7 +79,7 @@ All component CSS must follow this pattern. Current IDs in use:
 4. **Review**
    - **Weekly Review** — Time allocation and synthesis log
    - **Attribution** — View-vs-returns analysis with echarts
-5. **Practice** — Interview practice with typed or voice answers, scoring, and performance history
+5. **Practice** — Interview practice with typed or voice answers, optional OpenRouter TTS question playback, scoring, and performance history
 
 ### Data Flow
 
@@ -93,11 +93,11 @@ All component CSS must follow this pattern. Current IDs in use:
 | Module | Role |
 |---|---|
 | `app.py` | Entry point, MQ monogram header, global CSS theming (dark/light), 5-tab + secondary-tab routing, import/export/reset/settings dialogs |
-| `config.py` | LLM provider defaults (OpenRouter and OpenCode Go), base URLs, model slugs, max tokens, temperature; plus Obsidian default paths and interview fallback notes |
+| `config.py` | LLM provider defaults (OpenRouter and OpenCode Go), chat and Practice-TTS model slugs, max tokens, temperature; plus Obsidian default paths and interview fallback notes |
 | `models/schema.py` | Pydantic v2 models: `AppState`, `MacroView`, `AssetView`, `Reconciliation`, `BriefingStrip`, `Trade`, plus `TopicView`, `ViewPoint`, `ViewFact`, `ViewPracticeMeta` |
 | `models/interview.py` | Interview-practice models: `InterviewSession`, `InterviewQuestion`, `InterviewAnswer`, `InterviewPostmortem`, `InterviewDatabase` |
 | `storage/persistence.py` | `load_state()` / `save_state()` — JSON persistence; daily snapshots; schema migration |
-| `storage/user_settings.py` | `data/user_settings.json` persistence (Obsidian export path, Obsidian Views folder, LLM provider, API keys, and models) |
+| `storage/user_settings.py` | `data/user_settings.json` persistence (Obsidian paths, LLM provider/API keys/models, and Practice TTS enabled/model preferences) |
 | `storage/interview_store.py` | `data/interview_history.json` persistence + performance summary |
 | `storage/fred_client.py` | FRED API client — ~50 macro indicators; ETF data via yfinance |
 | `storage/fed_client.py` | Federal Reserve communications — FOMC statements/minutes/speeches listings, `#article` text extraction, permanent body cache |
@@ -110,10 +110,11 @@ All component CSS must follow this pattern. Current IDs in use:
 | `storage/topic_view_markdown.py` | TopicView Markdown parser/renderer for Obsidian sync |
 | `storage/topic_view_sync.py` | TopicView <-> Obsidian Views folder sync engine and `data/topic_view_sync.json` persistence |
 | `services/interview_llm.py` | Provider-neutral LLM client for interview practice |
-| `services/interview_controller.py` | Interview session state machine — `start_session()`, `evaluate_answer()`, `advance_session()` |
+| `services/interview_controller.py` | Interview session state machine — `start_session()`, `evaluate_answer()`, `advance_session()`; compact non-final evaluation schema, final-only postmortem, one malformed-JSON recovery |
 | `services/interview_prompts.py` | Versioned prompt pack (`PROMPT_PACK_VERSION`) + built-in presets |
 | `services/interview_speech.py` | Local faster-whisper transcription server + `/api/interview/transcribe` route |
 | `services/interview_speech_worker.py` | Isolated whisper worker subprocess |
+| `services/interview_tts.py` | OpenRouter TTS proxy + `/api/interview/tts` route; per-model voice/capability mapping, safe voice fallback, and Gemini PCM-to-MP3 conversion |
 | `setup_speech_runtime.py` | One-time installer for the isolated NumPy runtime used by whisper |
 | `components/status_bar.py` | Summary staleness indicator ("X current / Y need review" + weekly review age) |
 | `components/today.py` | Today tab dashboard |
@@ -128,8 +129,9 @@ All component CSS must follow this pattern. Current IDs in use:
 | `components/research_feed.py` | Papers tab — merged feed list, unread/all filter, mark-read state |
 | `components/trades.py` | Trade Tracker tab — add/close/delete ETF positions, price return vs total return |
 | `components/attribution.py` | Attribution tab — echarts timeline, score analysis, streak badges |
-| `components/interview_practice.py` | Practice tab UI — setup, sparring loop, postmortem, performance stats |
+| `components/interview_practice.py` | Practice tab UI — setup, sparring loop, keyboard shortcuts, exit confirmation, draft-only answer tips, optional question TTS controls, postmortem, performance stats |
 | `components/interview_speech.py` | Browser-side recorder glue for voice answers |
+| `components/interview_tts.py` | Browser playback glue for server-generated Practice question audio |
 | `export/excel.py` | Multi-sheet Excel workbook — macro views, asset views, reconciliations |
 | `export/topics.py` | One-way TopicView Markdown export placeholder; not the bidirectional sync engine |
 
@@ -189,7 +191,12 @@ All component CSS must follow this pattern. Current IDs in use:
 - **LLM Cache** — `data/briefing_cache.json` keyed by (base URL + model + content hash); document summaries share it via a `"SUMMARY::"` digest prefix.
 - **Fed doc bodies never change once published** — `fed_client.document_body()` caches them permanently to `data/fed_cache/<hash>.txt`; only the RSS listings re-fetch.
 - **Schema Migration** — `persistence.py` `_migrate()` handles old `state.json` gracefully, seeds `topic_views_version`, and migrates legacy asset directions to 1-5 scores.
-- **Interview History** — Practice sessions are persisted separately in `data/interview_history.json`.
+- **Interview History** — Practice sessions are persisted separately in `data/interview_history.json`. Sessions can be `active`, `completed`, or `abandoned`; exiting an in-progress session preserves any submitted answers but does not count it as completed or update My View practice metadata.
+- **Practice feedback contract** — Ordinary turns request only score/tags/critique and one next question. A full postmortem is requested only on the final turn. One malformed structured response triggers a compact retry; a second fails clearly without saving a partial turn.
+- **Practice draft tips** — **Get Answer Tips** is a separate, plain-text coaching call on the unsaved current draft. It returns exactly three actionable tips (structure, reasoning/mechanism, evidence/caveat), never scores, saves, or advances the answer. Stored View content is optional secondary context only and may be stale; it must never be treated as authoritative or forced into an answer.
+- **Practice keyboard flow** — `Ctrl/Cmd+Enter` submits an answer (or advances from Drill feedback); `Alt+M` starts/stops voice recording. Bare Enter and Space remain available for writing, and replay remains button-only to avoid browser shortcut conflicts.
+- **Practice voice controls** — Voice capture produces an editable live draft. The UI intentionally does not expose Download Audio or Improve Transcript; use **Get Answer Tips** to improve the substance of a draft before submitting.
+- **Practice TTS** — Optional question playback uses the local `/api/interview/tts` proxy and the stored OpenRouter key, never a browser-exposed key or the interview chat provider. The selectable models are Gemini 3.1 Flash TTS (default), Grok Voice TTS, and Deepgram Flux. Voice IDs and format behavior are explicitly per-model; Gemini PCM is transcoded to MP3 in memory with PyAV before browser playback.
 
 ### TopicView Obsidian Sync (Optional)
 
@@ -241,6 +248,7 @@ My Views can optionally sync bidirectionally with a dedicated Obsidian Views fol
 | `INTERVIEW_API_KEY` | Optional | API key for interview LLM |
 | `INTERVIEW_BASE_URL` | Optional | Interview LLM endpoint |
 | `INTERVIEW_MODEL` | Optional | Interview model slug |
+| `INTERVIEW_TTS_MODEL` | Optional | OpenRouter model for Practice question playback (default `google/gemini-3.1-flash-tts-preview`; requires an OpenRouter key even if interview chat uses OpenCode Go) |
 | `INTERVIEW_STT_MODEL` | Optional | Whisper model for transcription (default `small.en`) |
 | `INTERVIEW_STT_DEVICE` | Optional | Whisper device: `cpu`, `cuda`, or `auto` (default `cpu`) |
 | `INTERVIEW_STT_TIMEOUT` | Optional | Whisper transcription timeout in seconds (default `300`) |

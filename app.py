@@ -37,8 +37,10 @@ import config as app_config
 from services import llm_polish
 from services.interview_llm import available as interview_llm_available
 from services.interview_speech import register_interview_speech_routes
+from services.interview_tts import register_interview_tts_routes
 
 register_interview_speech_routes(ni_app)
+register_interview_tts_routes(ni_app)
 
 _BULL_SVG = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M18 16c-1 2-3 3-6 3s-5-1-6-3c-1-2-1-4 0-6 1-2 2-3 3-4 0-1 1-2 2-2 1 0 2 1 2 2 0 1 1 2 2 3 1 2 1 4 0 6zM6 8l-2 2M22 8l-2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>'
 _BEAR_SVG = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="15" r="6"/></svg>'

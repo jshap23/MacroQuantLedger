@@ -5,6 +5,15 @@ OPENROUTER_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
 # Default model slug on OpenRouter; override with OPENROUTER_MODEL or per-task env vars
 OPENROUTER_MODEL_DEFAULT = "moonshotai/kimi-k2.6"
 
+# Practice TTS uses OpenRouter's /audio/speech endpoint independently of the
+# interview chat provider and model.
+INTERVIEW_TTS_MODEL_DEFAULT = "google/gemini-3.1-flash-tts-preview"
+INTERVIEW_TTS_MODELS = (
+    INTERVIEW_TTS_MODEL_DEFAULT,
+    "x-ai/grok-voice-tts-1.0",
+    "deepgram/flux-tts:free",
+)
+
 # OpenCode Go — OpenAI-compatible subscription endpoint (https://opencode.ai/docs/go)
 OPENCODE_GO_BASE_URL_DEFAULT = "https://opencode.ai/zen/go/v1"
 # Default model ID on OpenCode Go; override with OPENCODE_MODEL or per-task env vars

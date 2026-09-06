@@ -28,7 +28,14 @@ def _system(session: InterviewSession, current_session_state: str) -> str:
 
 
 def _question(data: dict, fallback_topic: str) -> InterviewQuestion:
-    text = str(data.get("question") or data.get("next_question") or "").strip()
+    """Normalize the common question shapes returned by compatible models."""
+    value = (
+        data.get("question") or data.get("next_question") or data.get("nextQuestion")
+        or data.get("text") or ""
+    )
+    if isinstance(value, dict):
+        value = value.get("text") or value.get("question") or value.get("content") or ""
+    text = str(value).strip()
     if not text:
         raise RuntimeError("The interview model did not return a question.")
     return InterviewQuestion(
@@ -37,6 +44,26 @@ def _question(data: dict, fallback_topic: str) -> InterviewQuestion:
         concept=str(data.get("concept") or "").strip(),
         difficulty=str(data.get("difficulty") or "").strip() or None,
     )
+
+
+def _opening_question(session: InterviewSession) -> str:
+    """Provide a reliable first turn without relying on JSON-mode support."""
+    topic = session.topic
+    if session.preset_key == "quant_drill":
+        return f"What is the core intuition behind {topic}?"
+    if session.preset_key == "job_interview":
+        return f"What makes you a strong fit for {session.role or topic}?"
+    if session.preset_key == "research_defense":
+        return f"What is your main conclusion on {topic}, and what is the strongest evidence for it?"
+    return f"What's your view on {topic}?"
+
+
+def _has_question(data: dict, fallback_topic: str) -> bool:
+    try:
+        _question(data, fallback_topic)
+        return True
+    except RuntimeError:
+        return False
 
 
 def start_session(
@@ -53,6 +80,7 @@ def start_session(
     view_ids: list[str] | None = None,
     practice_style: str = "",
     view_context: str = "",
+    initial_question: str = "",
     provider: LLMProvider | None = None,
 ) -> InterviewSession:
     preset = get_preset(preset_key, mode)
@@ -72,32 +100,16 @@ def start_session(
         weakness_session=weakness_session or preset.key == "weaknesses",
         model=interview_model(model),
     )
-    setup = {
-        "task": "Start the session with one question.",
-        "topic": session.topic,
-        "role": session.role,
-        "focus_areas": session.focus_areas,
-        "target_questions": session.target_questions,
-        "preset": preset.label,
-        "output_schema": {
-            "question": "string", "topic": "string", "concept": "string",
-            "difficulty": "optional string",
-            "session_brief": "under 120 words: claims/topics to revisit; no coaching",
-        },
-    }
-    llm = provider or default_provider()
-    raw = llm.complete(
-        [
-            {"role": "system", "content": _system(session, json.dumps(setup))},
-            {"role": "user", "content": "Start the session with exactly one question using the required JSON schema."},
-        ],
-        CompletionOptions(model=session.model, max_tokens=220),
-    )
-    data = parse_json_response(raw)
-    session.questions.append(_question(data, session.topic))
-    session.compact_brief = str(data.get("session_brief") or session.materials[:1200]).strip()
-    save_session(session)
-    return session
+    # The opening question is deterministic. This makes practice immediately
+    # available with providers that do not reliably honor JSON mode (notably
+    # some DeepSeek-compatible endpoints), while all later turns still use
+    # the selected model to respond to the candidate's actual answer.
+    opening = initial_question.strip() or _opening_question(session)
+    if opening:
+        session.questions.append(_question({"question": opening}, session.topic))
+        session.compact_brief = session.materials[:1200]
+        save_session(session)
+        return session
 
 
 def _recent_context(session: InterviewSession) -> list[dict]:
@@ -117,6 +129,46 @@ def _compact_critique(value) -> str:
         text = text[:sentence_ends[1] + 1]
     words = text.split()
     return " ".join(words[:60])
+
+
+def _evaluation_schema(final_turn: bool) -> dict:
+    """Keep ordinary turns compact; postmortems belong only to the final turn."""
+    schema = {
+        "score": "integer 1-10; hidden by UI outside Drill",
+        "failure_tags": "array, maximum 2",
+        "critique": "maximum 2 sentences and 60 words; empty outside Drill",
+        "materially_weak": "boolean",
+        "next_question": "one candidate-facing question, or empty if done",
+        "next_topic": "string", "concept": "underlying concept", "difficulty": "optional string",
+        "done": "boolean",
+    }
+    if final_turn:
+        schema["postmortem"] = {
+            "overall_performance": "brief overall assessment or pass likelihood",
+            "biggest_problems": "max 3; also used for Work on / Still weak / risks",
+            "strongest_areas": "max 3; also used for Strong / Improved",
+            "concepts_to_repeat": "short list; also used for Repeat / Next priority",
+            "root_causes": {
+                "knowledge": "include questions exposing knowledge gaps when relevant",
+                "evidence/research": "", "reasoning": "",
+                "communication": "include questions where knowledge was present but communication failed when relevant",
+                "pressure handling": "",
+            },
+            "trend": "improving, unchanged, or worsening when history supports it",
+        }
+    return schema
+
+
+def _parse_evaluation_data(raw: str) -> dict:
+    """Reject incomplete JSON that the generic chat parser treats as prose."""
+    data = parse_json_response(raw)
+    expected = {
+        "score", "failure_tags", "critique", "materially_weak", "next_question",
+        "next_topic", "concept", "difficulty", "done", "postmortem",
+    }
+    if not any(key in data for key in expected):
+        raise ValueError("The interview model response did not contain evaluation fields.")
+    return data
 
 
 def evaluate_answer(
@@ -141,28 +193,7 @@ def evaluate_answer(
             "topic": session.topic, "role": session.role,
             "focus_areas": session.focus_areas, "compact_brief": session.compact_brief,
         },
-        "output_schema": {
-            "score": "integer 1-10; hidden by UI outside Drill",
-            "failure_tags": "array, maximum 2",
-            "critique": "maximum 2 sentences and 60 words; empty outside Drill",
-            "materially_weak": "boolean",
-            "next_question": "one candidate-facing question, or empty if done",
-            "next_topic": "string", "concept": "underlying concept", "difficulty": "optional string",
-            "done": "boolean",
-            "postmortem": {
-                "overall_performance": "brief overall assessment or pass likelihood",
-                "biggest_problems": "max 3; also used for Work on / Still weak / risks",
-                "strongest_areas": "max 3; also used for Strong / Improved",
-                "concepts_to_repeat": "short list; also used for Repeat / Next priority",
-                "root_causes": {
-                    "knowledge": "include questions exposing knowledge gaps when relevant",
-                    "evidence/research": "", "reasoning": "",
-                    "communication": "include questions where knowledge was present but communication failed when relevant",
-                    "pressure handling": "",
-                },
-                "trend": "improving, unchanged, or worsening when history supports it",
-            },
-        },
+        "output_schema": _evaluation_schema(final_turn),
     }
     llm = provider or default_provider()
     raw = llm.complete(
@@ -172,7 +203,42 @@ def evaluate_answer(
         ],
         CompletionOptions(model=session.model or interview_model(), max_tokens=650 if final_turn else 350),
     )
-    data = parse_json_response(raw)
+    try:
+        data = _parse_evaluation_data(raw)
+    except (ValueError, json.JSONDecodeError):
+        # A provider can still cut off a structured response. Retry once with
+        # the already-scoped compact contract instead of losing the answer.
+        recovery = llm.complete(
+            [
+                {"role": "system", "content": _system(session, json.dumps(prompt))},
+                {"role": "user", "content": (
+                    "Your previous response was malformed. Return valid JSON only using "
+                    "the exact required schema, with no preamble or extra fields."
+                )},
+            ],
+            CompletionOptions(model=session.model or interview_model(), max_tokens=650 if final_turn else 350),
+        )
+        try:
+            data = _parse_evaluation_data(recovery)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError("The interview model returned malformed structured feedback twice.") from exc
+    # A few OpenAI-compatible DeepSeek endpoints emit prose or a partial JSON
+    # object despite response_format=json_object. Recover with a tiny plain-
+    # text request instead of failing the candidate's submitted answer.
+    if not (bool(data.get("done")) or final_turn) and not _has_question(data, session.topic):
+        recovery = llm.complete(
+            [
+                {"role": "system", "content": _system(session, json.dumps(prompt))},
+                {"role": "user", "content": "Ask one concise follow-up question only. Return plain text; no JSON, analysis, score, or preamble."},
+            ],
+            CompletionOptions(
+                model=session.model or interview_model(), max_tokens=100,
+                temperature=0.2, json_mode=False,
+            ),
+        )
+        recovered = parse_json_response(recovery)
+        if _has_question(recovered, session.topic):
+            data["next_question"] = _question(recovered, session.topic).text
     try:
         score = max(1, min(10, int(data.get("score"))))
     except (TypeError, ValueError):
@@ -251,7 +317,13 @@ def advance_session(session_id: str, result: dict) -> InterviewSession:
     if session is None or session.status != "active":
         raise RuntimeError("This practice session is no longer active.")
     session.questions.append(_question({
-        "question": result.get("next_question"),
+        # Some providers retain the opening-turn field name ("question")
+        # despite being asked for "next_question".  _question intentionally
+        # accepts both so a valid follow-up cannot be discarded.
+        "question": (
+            result.get("next_question") or result.get("nextQuestion")
+            or result.get("question") or result.get("text")
+        ),
         "topic": result.get("next_topic") or session.topic,
         "concept": result.get("concept"),
         "difficulty": result.get("difficulty"),
@@ -259,3 +331,57 @@ def advance_session(session_id: str, result: dict) -> InterviewSession:
     session.pending_move = {}
     save_session(session)
     return session
+
+
+def abandon_session(session_id: str) -> InterviewSession:
+    """End a session without scoring it or recording View-practice metadata."""
+    session = get_session(session_id)
+    if session is None or session.status != "active":
+        raise RuntimeError("This practice session is no longer active.")
+    session.status = "abandoned"
+    session.completed_at = datetime.now(timezone.utc)
+    session.pending_move = {}
+    save_session(session)
+    return session
+
+
+def answer_tips(
+    session_id: str,
+    answer_text: str,
+    provider: LLMProvider | None = None,
+) -> str:
+    """Coach a draft without evaluating, saving, or advancing the session."""
+    session = get_session(session_id)
+    if session is None or session.status != "active" or not session.questions:
+        raise RuntimeError("This practice session is no longer active.")
+    draft = answer_text.strip()
+    if not draft:
+        raise ValueError("Write a draft before requesting tips.")
+    question = session.questions[-1]
+    prompt = {
+        "current_question": question.text,
+        "draft_answer": draft,
+        "session_topic": session.topic,
+        "stored_view_context": session.view_context[:6000],
+    }
+    llm = provider or default_provider()
+    raw = llm.complete(
+        [
+            {"role": "system", "content": (
+                "You are a concise interview-answer coach. Give exactly 3 short, actionable "
+                "tips for improving the candidate's draft before they submit it. Prioritize: "
+                "(1) answering the question up front and structure, (2) missing causal mechanism "
+                "or reasoning, and (3) evidence, caveat, or likely pushback when relevant. Do not "
+                "score the answer, ask another question, or write a replacement answer. The stored "
+                "View context is optional secondary reference material; it may be stale, so do not "
+                "treat it as authoritative or force it into the answer. Return plain text with three "
+                "numbered tips only."
+            )},
+            {"role": "user", "content": json.dumps(prompt)},
+        ],
+        CompletionOptions(
+            model=session.model or interview_model(), max_tokens=300,
+            temperature=0.25, json_mode=False,
+        ),
+    )
+    return raw.strip() or "No tips were returned. Review the answer for a clear conclusion and supporting mechanism."

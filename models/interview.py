@@ -69,7 +69,7 @@ class InterviewSession(BaseModel):
     model: str = ""
     compact_brief: str = ""
     pending_move: dict = Field(default_factory=dict)
-    status: Literal["active", "completed"] = "active"
+    status: Literal["active", "completed", "abandoned"] = "active"
     questions: list[InterviewQuestion] = Field(default_factory=list)
     postmortem: Optional[InterviewPostmortem] = None
 

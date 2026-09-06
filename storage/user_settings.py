@@ -177,6 +177,38 @@ def save_research_summary_model(value: str) -> None:
         _write(settings)
 
 
+def interview_tts_enabled() -> bool:
+    """Whether new Practice questions should be read aloud automatically."""
+    return load_user_settings().get("interview_tts_enabled") is True
+
+
+def save_interview_tts_enabled(value: bool) -> None:
+    with _LOCK:
+        settings = load_user_settings()
+        settings["interview_tts_enabled"] = bool(value)
+        _write(settings)
+
+
+def interview_tts_model() -> str:
+    configured = _strip(os.environ.get("INTERVIEW_TTS_MODEL"))
+    if configured:
+        return configured
+    stored = _strip(load_user_settings().get("interview_tts_model"))
+    if stored in app_config.INTERVIEW_TTS_MODELS:
+        return stored
+    return app_config.INTERVIEW_TTS_MODEL_DEFAULT
+
+
+def save_interview_tts_model(value: str) -> None:
+    cleaned = _strip(value)
+    if cleaned not in app_config.INTERVIEW_TTS_MODELS:
+        raise ValueError("Choose one of the supported Practice TTS models.")
+    with _LOCK:
+        settings = load_user_settings()
+        settings["interview_tts_model"] = cleaned
+        _write(settings)
+
+
 DEFAULT_DEPRIORITIZED_SOURCES = ["arXiv q-fin"]
 
 

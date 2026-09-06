@@ -1,20 +1,29 @@
 """Active interview practice UI: setup, sparring loop, and performance view."""
 from __future__ import annotations
 
+import random
+
 from nicegui import run, ui
 
-from services.interview_controller import advance_session, evaluate_answer, start_session
+from services.interview_controller import (
+    abandon_session, advance_session, answer_tips, evaluate_answer, start_session,
+)
 from services.interview_llm import available as llm_available, interview_model, selectable_models
 from services.interview_prompts import (
     PRESETS, PROMPT_PACK_VERSION, built_in_prompt, get_preset,
 )
 from components.interview_speech import (
-    cancel_recording, download_recording, start_recording, stop_recording,
-    transcribe_recording,
+    cancel_recording, start_recording, stop_recording,
 )
+from components.interview_tts import speak_question, stop_speaking
 from storage.interview_store import (
     load_database, performance_summary, preferred_model, save_preferred_model,
 )
+from storage.user_settings import (
+    interview_tts_enabled, interview_tts_model, save_interview_tts_enabled,
+    save_interview_tts_model,
+)
+import config as app_config
 from services.topic_views import views_context
 from storage.persistence import load_state
 
@@ -75,6 +84,14 @@ def _inject_css() -> None:
             min-height:1.1rem; color:var(--text-muted); font-size:0.75rem;
             line-height:1.45; font-style:italic;
         }
+        .interview-tts-status {
+            color:var(--text-faint); font-size:0.68rem; min-height:1rem;
+            font-family:'IBM Plex Mono',monospace;
+        }
+        .interview-shortcuts {
+            color:var(--text-faint); font-size:0.66rem; line-height:1.45;
+            font-family:'IBM Plex Mono',monospace;
+        }
         .interview-quick {
             width:calc(33.333% - 0.55rem); min-width:220px; min-height:88px;
             align-items:flex-start !important; text-align:left; padding:0.8rem !important;
@@ -94,12 +111,6 @@ def _label(text: str) -> None:
     ui.label(text).classes("field-label")
 
 
-def _stat(value: str, label: str) -> None:
-    with ui.element("div").classes("interview-stat"):
-        ui.label(value).classes("interview-stat-value")
-        ui.label(label).classes("interview-meta")
-
-
 def render_interview_practice(app_state=None, launch_bridge=None, review_view=None) -> None:
     _inject_css()
     state = {
@@ -111,6 +122,9 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
         "view_setup": None,
         "review_view": review_view,
         "app_state": app_state,
+        "tts_enabled": interview_tts_enabled(),
+        "tts_model": interview_tts_model(),
+        "last_tts_question": None,
     }
     root = ui.element("div").classes("interview-shell")
 
@@ -150,23 +164,19 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
             icon="shuffle" if active_views else "psychology",
         ).classes("submit-btn")
 
-    with ui.row().style("gap:0.65rem; width:100%; margin:1rem 0; flex-wrap:wrap;"):
-        _stat(str(summary["questions_answered"]), "questions answered")
-        _stat(str(summary["sessions_completed"]), "sessions completed")
-        _stat(str(len(summary["due"])), "concepts due")
-
     def weakness_setup() -> None:
         state["weakness_setup"] = True
         state["selected_preset"] = "weaknesses"
         refresh()
 
     def surprise() -> None:
-        ranked = sorted(active_views, key=lambda view: (
-            0 if view.priority == "Core" else 1,
-            view.practice.last_practiced is not None,
-            view.practice.last_practiced or view.created_at,
-        ))
-        state["view_setup"] = {"ids": [ranked[0].id], "style": "Deliver"}
+        """Pick one active My View and open a ready-to-start practice session."""
+        selected = random.choice(active_views)
+        state["view_setup"] = {
+            "ids": [selected.id],
+            "style": "Deliver",
+            "surprise": True,
+        }
         refresh()
 
     primary_action.on("click", surprise if active_views else weakness_setup)
@@ -240,9 +250,14 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
     preset_key = f"view_{style.lower()}"
     preset = get_preset(preset_key)
     with ui.element("div").classes("interview-card").style("border-color:var(--accent)"):
-        ui.label(f"{style.upper()} · MY VIEWS").classes("interview-kicker")
+        ui.label(
+            "SURPRISE PICK · MY VIEWS" if setup.get("surprise") else f"{style.upper()} · MY VIEWS"
+        ).classes("interview-kicker")
         ui.label(" + ".join(view.name for view in views)).style("font-size:1.15rem;font-weight:700;margin:.35rem 0")
-        ui.label(preset.description).classes("interview-meta")
+        ui.label(
+            "A random active View is ready for a Deliver session."
+            if setup.get("surprise") else preset.description
+        ).classes("interview-meta")
         if style == "Deliver" and len(views) > 1:
             ui.label("Mixed Deliver sessions move between selected Views; each answer is evaluated semantically, not word-for-word.").classes("interview-meta")
         default_model = preferred_model() or interview_model()
@@ -262,6 +277,9 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
                     topic=" / ".join(view.name for view in views),
                     materials="", view_ids=[view.id for view in views],
                     practice_style=style, view_context=views_context(views),
+                    initial_question=(
+                        f"What's your view on {views[0].name}?" if len(views) == 1 else ""
+                    ),
                     target_questions=(len(views) if style == "Deliver" else preset.default_questions),
                     model=chosen_model,
                 ))
@@ -388,16 +406,103 @@ def _render_setup(state: dict, refresh) -> None:
 def _render_session(session, state: dict, refresh) -> None:
     question = session.questions[-1]
     preset = get_preset(session.preset_key, session.mode)
+
+    async def end_session() -> None:
+        try:
+            await stop_speaking()
+            await cancel_recording()
+            await run.io_bound(lambda: abandon_session(session.id))
+            state.update(session=None, pending=None, retrying=False)
+            refresh()
+        except Exception as exc:
+            ui.notify(f"Could not end session: {exc}", type="negative")
+
+    with ui.dialog() as exit_dialog, ui.card().style("max-width:430px;"):
+        ui.label("End this practice session?").style("font-size:1.05rem;font-weight:700;")
+        ui.label(
+            "Your submitted answers stay in your history, but this unfinished session will not be scored "
+            "as completed or update My View practice metadata."
+        ).classes("interview-meta").style("margin-top:.4rem;")
+        with ui.row().style("justify-content:flex-end;gap:.55rem;margin-top:.9rem;"):
+            ui.button("Keep Practicing", on_click=exit_dialog.close).classes("cancel-btn")
+            ui.button("End Session", on_click=end_session).classes("submit-btn")
+
     with ui.row().style("justify-content:space-between; align-items:center; width:100%; gap:0.75rem; flex-wrap:wrap;"):
-        ui.label(f"{preset.label.upper()} · {session.topic}").classes("interview-kicker")
-        ui.label(f"QUESTION {len(session.questions)} / {session.target_questions}").classes("interview-meta")
+        with ui.column().style("gap:.15rem;"):
+            ui.label(f"{preset.label.upper()} · {session.topic}").classes("interview-kicker")
+            ui.label(f"QUESTION {len(session.questions)} / {session.target_questions}").classes("interview-meta")
+        ui.button("Exit Session", icon="logout", on_click=exit_dialog.open).props(
+            "flat dense no-caps"
+        ).style("color:var(--text-muted);font-size:.72rem;")
     ui.label(f"MODEL · {session.model or interview_model()}").style(
         "color:var(--text-faint);font-size:0.6rem;margin-top:0.25rem;"
     )
 
     with ui.element("div").classes("interview-card").style("margin-top:0.75rem;"):
-        ui.label("INTERVIEWER").classes("interview-kicker")
+        with ui.row().style(
+            "justify-content:space-between;align-items:center;width:100%;gap:.6rem;flex-wrap:wrap;"
+        ):
+            ui.label("INTERVIEWER").classes("interview-kicker")
+            tts_toggle = ui.checkbox(
+                "Read new questions aloud", value=state["tts_enabled"],
+            ).props("dense").classes("interview-meta")
         ui.label(question.text).classes("interview-question")
+
+        tts_status = ui.label(
+            "TTS · waiting for question" if state["tts_enabled"]
+            else "TTS · playback off"
+        ).classes("interview-tts-status")
+
+        async def play_question() -> None:
+            try:
+                result = await speak_question(question.text, state["tts_model"])
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc)}
+            if result.get("ok"):
+                state["last_tts_question"] = question.id
+                tts_status.set_text("Reading question aloud")
+            else:
+                message = str(result.get("error") or "Could not play this question.")
+                tts_status.set_text(message)
+                ui.notify(message, type="warning")
+
+        async def change_tts(_) -> None:
+            enabled = bool(tts_toggle.value)
+            state["tts_enabled"] = enabled
+            save_interview_tts_enabled(enabled)
+            if enabled:
+                await play_question()
+            else:
+                await stop_speaking()
+                tts_status.set_text("Automatic playback off")
+
+        tts_toggle.on("update:model-value", change_tts)
+        with ui.row().style("gap:.45rem;align-items:center;margin:.15rem 0 .8rem;flex-wrap:wrap;"):
+            tts_model = ui.select(
+                {
+                    "google/gemini-3.1-flash-tts-preview": "Gemini 3.1 Flash TTS (default)",
+                    "x-ai/grok-voice-tts-1.0": "Grok Voice TTS 1.0",
+                    "deepgram/flux-tts:free": "Deepgram Flux TTS (free)",
+                },
+                value=state["tts_model"], label="TTS model",
+            ).classes("dark-input").style("min-width:265px;")
+
+            def change_tts_model(_) -> None:
+                model = tts_model.value or app_config.INTERVIEW_TTS_MODEL_DEFAULT
+                state["tts_model"] = model
+                save_interview_tts_model(model)
+
+            tts_model.on("update:model-value", change_tts_model)
+            ui.button("Replay Question", icon="volume_up", on_click=play_question).props(
+                "flat dense no-caps"
+            ).style("color:var(--accent);font-size:.72rem;")
+            ui.button("Stop", icon="stop", on_click=stop_speaking).props(
+                "flat dense no-caps"
+            ).style("color:var(--text-muted);font-size:.72rem;")
+
+        if state["tts_enabled"] and state["last_tts_question"] != question.id:
+            state["last_tts_question"] = question.id
+            ui.timer(0.15, play_question, once=True)
 
         pending = state["pending"]
         if session.mode == "Drill" and pending is not None:
@@ -421,7 +526,9 @@ def _render_session(session, state: dict, refresh) -> None:
         recording_panel.visible = False
         fallback_preview = {"text": ""}
         voice_draft = {"base": "", "draft": "", "full": ""}
-        improved_ready = {"text": ""}
+        voice_active = {"value": False}
+        submitting = {"value": False}
+        tips_loading = {"value": False}
 
         def combined(base: str, text: str) -> str:
             return f"{base.strip()} {text.strip()}".strip()
@@ -452,49 +559,36 @@ def _render_session(session, state: dict, refresh) -> None:
                 current = (answer.value or "").strip()
                 if voice_draft["full"] and current == voice_draft["full"]:
                     answer.set_value(combined(voice_draft["base"], improved))
-                elif voice_draft["full"]:
-                    improved_ready["text"] = improved
-                    live_caption.set_text(f"Improved transcript: {improved}")
-                    use_preview_btn.set_text("Replace with Improved")
-                    use_preview_btn.visible = True
-                    recording_status.set_text("Improved transcript ready · live draft was edited")
                 else:
                     append_transcript(improved)
                 device = result.get("device") or "local"
                 model_name = result.get("model") or "speech model"
-                if not improved_ready["text"]:
-                    recording_status.set_text(
-                        f"Improved with {model_name} on {device} · review before submitting"
-                    )
+                recording_status.set_text(
+                    f"Transcript ready with {model_name} on {device} · review before submitting"
+                )
                 error.set_text("")
-                retry_voice_btn.visible = False
-                download_voice_btn.visible = False
-                if not improved_ready["text"]:
-                    use_preview_btn.visible = False
                 fallback_preview["text"] = ""
-                if not improved_ready["text"]:
-                    voice_draft.update(base="", draft="", full="")
+                voice_draft.update(base="", draft="", full="")
                 set_idle(record_more=True)
                 return
             message = str(result.get("error") or "Transcription failed.")
             recording_status.set_text("Audio retained for recovery")
             error.set_text(message)
-            retryable = bool(result.get("retryable"))
             fallback_preview["text"] = str(result.get("preview") or "").strip()
-            retry_voice_btn.visible = retryable
-            download_voice_btn.visible = retryable
             use_preview_btn.visible = bool(fallback_preview["text"]) and not voice_draft["full"]
             use_preview_btn.set_text("Use Live Captions")
-            mic.visible = not retryable
-            if not retryable:
-                mic.enable()
+            mic.visible = True
+            mic.enable()
             stop_btn.visible = False
-            cancel_voice_btn.visible = retryable
+            cancel_voice_btn.visible = True
             cancel_voice_btn.set_text("Discard Recording")
             submit_btn.enable()
 
         async def begin_voice() -> None:
+            if voice_active["value"] or submitting["value"]:
+                return
             error.set_text("")
+            await stop_speaking()
             mic.disable()
             submit_btn.disable()
             try:
@@ -505,6 +599,7 @@ def _render_session(session, state: dict, refresh) -> None:
                 error.set_text(str(result.get("error") or "Could not start recording."))
                 set_idle()
                 return
+            voice_active["value"] = True
             recording_panel.visible = True
             recording_status.set_text("Recording 00:00 · pauses are safe")
             mic.visible = False
@@ -514,6 +609,9 @@ def _render_session(session, state: dict, refresh) -> None:
             cancel_voice_btn.set_text("Cancel")
 
         async def finish_voice() -> None:
+            if not voice_active["value"]:
+                return
+            voice_active["value"] = False
             stop_btn.disable()
             cancel_voice_btn.disable()
             recording_status.set_text("Stopping recording…")
@@ -534,9 +632,6 @@ def _render_session(session, state: dict, refresh) -> None:
                         "Audio recorded · no live captions were available"
                     )
                 fallback_preview["text"] = preview
-                retry_voice_btn.set_text("Improve Transcript")
-                retry_voice_btn.visible = True
-                download_voice_btn.visible = True
                 use_preview_btn.visible = False
                 mic.visible = False
                 stop_btn.visible = False
@@ -547,51 +642,33 @@ def _render_session(session, state: dict, refresh) -> None:
                 handle_transcription(result)
             cancel_voice_btn.enable()
 
-        async def retry_voice() -> None:
-            retry_voice_btn.disable()
-            recording_status.set_text("Improving with local transcription…")
-            context = f"{session.topic}. {question.text}. {session.role} {session.focus_areas}"
-            try:
-                result = await transcribe_recording(context)
-            except Exception as exc:
-                result = {"ok": False, "error": str(exc), "retryable": True}
-            retry_voice_btn.enable()
-            handle_transcription(result)
-
         async def discard_voice() -> None:
             await cancel_recording()
+            voice_active["value"] = False
             fallback_preview["text"] = ""
-            retry_voice_btn.visible = False
-            download_voice_btn.visible = False
             use_preview_btn.visible = False
             recording_status.set_text("Recording discarded")
             error.set_text("")
             set_idle()
 
-        async def save_audio() -> None:
-            if not await download_recording():
-                ui.notify("No recoverable audio is available.", type="warning")
-
         def use_preview() -> None:
-            if improved_ready["text"]:
-                answer.set_value(combined(voice_draft["base"], improved_ready["text"]))
-                improved_ready["text"] = ""
-                voice_draft.update(base="", draft="", full="")
-                live_caption.set_text("")
-                use_preview_btn.visible = False
-                recording_status.set_text("Improved transcript inserted · review before submitting")
-            elif fallback_preview["text"]:
+            if fallback_preview["text"]:
                 append_transcript(fallback_preview["text"])
-                retry_voice_btn.visible = False
                 use_preview_btn.visible = False
                 recording_status.set_text("Live captions inserted · audio remains available")
             submit_btn.enable()
 
         async def submit() -> None:
+            if submitting["value"]:
+                return
+            if voice_active["value"]:
+                error.set_text("Stop the recording before submitting your answer.")
+                return
             text = (answer.value or "").strip()
             if not text:
                 error.set_text("Answer the question, or say plainly that you do not know.")
                 return
+            submitting["value"] = True
             submit_btn.disable()
             mic.disable()
             submit_btn.set_text("Evaluating…" if session.mode == "Drill" else "Continuing…")
@@ -607,28 +684,86 @@ def _render_session(session, state: dict, refresh) -> None:
                     state["pending"] = result
                 else:
                     state["session"] = await run.io_bound(lambda: advance_session(session.id, result))
+                await stop_speaking()
                 await cancel_recording()
                 refresh()
             except Exception as exc:
                 error.set_text(f"Could not continue: {exc}")
+                submitting["value"] = False
                 submit_btn.enable()
                 mic.enable()
                 submit_btn.set_text("Submit Answer")
 
+        with ui.element("div").classes("interview-feedback") as tips_panel:
+            ui.label("DRAFT TIPS").classes("interview-kicker")
+            tips_text = ui.label("").style(
+                "color:var(--text-muted);font-size:.8rem;line-height:1.55;white-space:pre-wrap;margin-top:.35rem;"
+            )
+            ui.label(
+                "Tips are not a score and are not saved. Your stored Views are optional secondary context and may be stale."
+            ).classes("interview-meta").style("margin-top:.45rem;")
+            ui.button("Revise Answer", icon="edit", on_click=lambda: answer.run_method("focus")).props(
+                "flat dense no-caps"
+            ).style("color:var(--accent);font-size:.72rem;margin-top:.35rem;")
+        tips_panel.visible = False
+
+        async def get_tips() -> None:
+            if tips_loading["value"] or submitting["value"]:
+                return
+            text = (answer.value or "").strip()
+            if not text:
+                error.set_text("Write a draft first, then request tips.")
+                answer.run_method("focus")
+                return
+            if voice_active["value"]:
+                error.set_text("Stop the recording before requesting tips.")
+                return
+            tips_loading["value"] = True
+            tips_btn.disable()
+            tips_btn.set_text("Reviewing Draft…")
+            error.set_text("")
+            try:
+                tips = await run.io_bound(lambda: answer_tips(session.id, text))
+                tips_text.set_text(tips)
+                tips_panel.visible = True
+                answer.run_method("focus")
+            except Exception as exc:
+                error.set_text(f"Could not get tips: {exc}")
+            finally:
+                tips_loading["value"] = False
+                tips_btn.enable()
+                tips_btn.set_text("Get Answer Tips")
+
         with ui.row().style("gap:0.65rem; align-items:center; margin-top:0.8rem; flex-wrap:wrap;"):
             submit_btn = ui.button("Submit Answer", on_click=submit).classes("submit-btn")
+            tips_btn = ui.button("Get Answer Tips", icon="tips_and_updates", on_click=get_tips).classes("cancel-btn")
             mic = ui.button("Speak Answer", icon="mic", on_click=begin_voice).classes("cancel-btn")
             stop_btn = ui.button("Stop & Use Live Draft", icon="stop", on_click=finish_voice).classes("submit-btn")
             cancel_voice_btn = ui.button("Cancel", on_click=discard_voice).classes("cancel-btn")
-            retry_voice_btn = ui.button("Improve Transcript", on_click=retry_voice).classes("submit-btn")
             use_preview_btn = ui.button("Use Live Captions", on_click=use_preview).classes("cancel-btn")
-            download_voice_btn = ui.button("Download Audio", on_click=save_audio).classes("cancel-btn")
             stop_btn.visible = False
             cancel_voice_btn.visible = False
-            retry_voice_btn.visible = False
             use_preview_btn.visible = False
-            download_voice_btn.visible = False
-            ui.label("Recording continues through pauses and becomes editable text.").classes("interview-meta")
+            ui.label("Voice drafts stay editable. Get Answer Tips gives coaching before you submit.").classes("interview-meta")
+        ui.label(
+            "SHORTCUTS · Ctrl/Cmd+Enter submit · Alt+M start/stop voice"
+        ).classes("interview-shortcuts").style("margin-top:0.55rem;")
+
+        async def handle_shortcut(event) -> None:
+            if not event.action.keydown or event.action.repeat:
+                return
+            if event.key.enter and (event.modifiers.ctrl or event.modifiers.meta):
+                await submit()
+            elif event.key.name.lower() == "m" and event.modifiers.alt:
+                if voice_active["value"]:
+                    await finish_voice()
+                else:
+                    await begin_voice()
+
+        # Deliberately include textarea focus: Ctrl/Cmd+Enter is a submit chord,
+        # while ordinary Enter and Space remain safe for writing an answer.
+        ui.keyboard(handle_shortcut, repeating=False, ignore=[])
+        ui.timer(0.1, lambda: answer.run_method("focus"), once=True)
 
 
 def _render_drill_feedback(session, result: dict, state: dict, refresh) -> None:
@@ -642,13 +777,19 @@ def _render_drill_feedback(session, result: dict, state: dict, refresh) -> None:
             "color:var(--text-muted); font-size:0.82rem; line-height:1.55; white-space:pre-wrap;"
         )
 
+    advancing = {"value": False}
+
     async def next_question() -> None:
+        if advancing["value"]:
+            return
+        advancing["value"] = True
         try:
             state["session"] = await run.io_bound(lambda: advance_session(session.id, result))
             state["pending"] = None
             state["retrying"] = False
             refresh()
         except Exception as exc:
+            advancing["value"] = False
             ui.notify(f"Could not continue: {exc}", type="negative")
 
     def retry() -> None:
@@ -661,6 +802,17 @@ def _render_drill_feedback(session, result: dict, state: dict, refresh) -> None:
         if materially_weak and not state["retrying"]:
             ui.button("Retry Once", on_click=retry).classes("submit-btn")
         ui.button("Next Question", on_click=next_question).classes("cancel-btn")
+    ui.label("SHORTCUTS · Ctrl/Cmd+Enter next question").classes(
+        "interview-shortcuts"
+    ).style("margin-top:0.55rem;")
+
+    async def handle_shortcut(event) -> None:
+        if not event.action.keydown or event.action.repeat:
+            return
+        if event.key.enter and (event.modifiers.ctrl or event.modifiers.meta):
+            await next_question()
+
+    ui.keyboard(handle_shortcut, repeating=False, ignore=[])
 
 
 def _render_postmortem(session, state: dict, refresh) -> None:
