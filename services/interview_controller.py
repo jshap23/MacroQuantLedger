@@ -22,6 +22,7 @@ def _system(session: InterviewSession, current_session_state: str) -> str:
         role=session.role,
         focus_areas=session.focus_areas,
         materials="\n\n".join(part for part in (session.materials, session.view_context) if part),
+        model_context=session.model_context,
         current_session_state=current_session_state,
         prompt_override=session.prompt_override,
     )
@@ -55,6 +56,14 @@ def _opening_question(session: InterviewSession) -> str:
         return f"What makes you a strong fit for {session.role or topic}?"
     if session.preset_key == "research_defense":
         return f"What is your main conclusion on {topic}, and what is the strongest evidence for it?"
+    if session.preset_key == "model_explain":
+        return f"Walk me through {topic}."
+    if session.preset_key == "model_defend":
+        return f"Why should I believe {topic} is the right tool for a hard problem?"
+    if session.preset_key == "model_compare":
+        return f"What is the key difference between {topic}, and when would you pick one over the other?"
+    if session.preset_key == "model_deep_dive":
+        return f"What exactly is {topic} optimizing?"
     return f"What's your view on {topic}?"
 
 
@@ -80,6 +89,9 @@ def start_session(
     view_ids: list[str] | None = None,
     practice_style: str = "",
     view_context: str = "",
+    model_note_ids: list[str] | None = None,
+    model_note_titles: list[str] | None = None,
+    model_context: str = "",
     initial_question: str = "",
     provider: LLMProvider | None = None,
 ) -> InterviewSession:
@@ -96,6 +108,9 @@ def start_session(
         view_ids=view_ids or [],
         practice_style=practice_style.strip(),
         view_context=view_context.strip(),
+        model_note_ids=model_note_ids or [],
+        model_note_titles=model_note_titles or [],
+        model_context=model_context or "",
         target_questions=max(1, min(50, int(target_questions))),
         weakness_session=weakness_session or preset.key == "weaknesses",
         model=interview_model(model),
@@ -107,7 +122,7 @@ def start_session(
     opening = initial_question.strip() or _opening_question(session)
     if opening:
         session.questions.append(_question({"question": opening}, session.topic))
-        session.compact_brief = session.materials[:1200]
+        session.compact_brief = session.materials[:1200] or (model_context or "")[:1200]
         save_session(session)
         return session
 

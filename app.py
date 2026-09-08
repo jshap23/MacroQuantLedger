@@ -22,6 +22,8 @@ from storage.user_settings import (
     save_obsidian_export_path,
     obsidian_views_folder,
     save_obsidian_views_folder,
+    quant_models_folder,
+    save_quant_models_folder,
     llm_provider,
     save_llm_provider,
     llm_api_key,
@@ -764,6 +766,12 @@ def index():
                         "Enable bidirectional My Views sync",
                         value=sync_is_enabled(),
                     ).style("margin-top:0.5rem")
+                    current_models_folder = quant_models_folder()
+                    models_folder_input = ui.input(
+                        value=str(current_models_folder) if current_models_folder else "",
+                        label="Quant Models folder (read-only, powers Practice My Models)",
+                        placeholder=r"C:\Path\To\ObsidianVault\Resources\Models",
+                    ).classes("w-full dark-input").style("margin-top:0.6rem")
 
 
                     def _refresh_provider_inputs():
@@ -874,6 +882,8 @@ def index():
                             save_obsidian_export_path(path_input.value or "")
                             if views_folder_input.value:
                                 save_obsidian_views_folder(views_folder_input.value)
+                            if models_folder_input.value:
+                                save_quant_models_folder(models_folder_input.value)
                             set_sync_enabled(sync_enabled.value)
                             provider = provider_select.value or app_config.LLM_PROVIDER_DEFAULT
                             save_llm_provider(provider)

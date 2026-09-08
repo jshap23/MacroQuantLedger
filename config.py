@@ -36,5 +36,9 @@ OBSIDIAN_EXPORT_PATH_DEFAULT = r"C:\Users\jshap\JS_Obsidian"
 # the app under ··· → Settings; OBSIDIAN_VIEWS_FOLDER overrides this value.
 OBSIDIAN_VIEWS_FOLDER_DEFAULT = r"C:\Users\jshap\JS_Obsidian\Views"
 
+# Read-only Obsidian folder of interview-facing model notes powering Quant
+# Practice "My Models". QUANT_MODELS_FOLDER overrides this value.
+OBSIDIAN_MODELS_FOLDER_DEFAULT = r"C:\Users\jshap\JS_Obsidian\Resources\Models"
+
 # Interview practice may use INTERVIEW_MODEL / INTERVIEW_BASE_URL /
 # INTERVIEW_API_KEY. Each falls back to the active provider configuration.

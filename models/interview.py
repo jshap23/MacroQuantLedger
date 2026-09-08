@@ -64,6 +64,9 @@ class InterviewSession(BaseModel):
     view_ids: list[str] = Field(default_factory=list)
     practice_style: str = ""
     view_context: str = ""
+    model_note_ids: list[str] = Field(default_factory=list)
+    model_note_titles: list[str] = Field(default_factory=list)
+    model_context: str = ""
     target_questions: int = 10
     weakness_session: bool = False
     model: str = ""

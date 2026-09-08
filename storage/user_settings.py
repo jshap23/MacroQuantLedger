@@ -40,6 +40,15 @@ def obsidian_views_folder() -> Path | None:
     return Path(raw).expanduser() if raw else None
 
 
+def quant_models_folder() -> Path | None:
+    raw = (
+        (os.environ.get("QUANT_MODELS_FOLDER") or "").strip()
+        or str(load_user_settings().get("quant_models_folder") or "").strip()
+        or app_config.OBSIDIAN_MODELS_FOLDER_DEFAULT.strip()
+    )
+    return Path(raw).expanduser() if raw else None
+
+
 def save_obsidian_export_path(value: str) -> Path:
     cleaned = value.strip().strip('"')
     if not cleaned:
@@ -64,6 +73,20 @@ def save_obsidian_views_folder(value: str) -> Path:
     with _LOCK:
         settings = load_user_settings()
         settings["obsidian_views_folder"] = str(path)
+        _write(settings)
+    return path
+
+
+def save_quant_models_folder(value: str) -> Path:
+    cleaned = value.strip().strip('"')
+    if not cleaned:
+        raise ValueError("Enter the absolute Obsidian Models folder.")
+    path = Path(cleaned).expanduser()
+    if not path.is_absolute():
+        raise ValueError("Use an absolute path, for example C:\\Obsidian\\Vault\\Resources\\Models.")
+    with _LOCK:
+        settings = load_user_settings()
+        settings["quant_models_folder"] = str(path)
         _write(settings)
     return path
 

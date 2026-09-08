@@ -79,7 +79,7 @@ All component CSS must follow this pattern. Current IDs in use:
 4. **Review**
    - **Weekly Review** — Time allocation and synthesis log
    - **Attribution** — View-vs-returns analysis with echarts
-5. **Practice** — Interview practice with typed or voice answers, optional OpenRouter TTS question playback, scoring, and performance history
+5. **Practice** — Interview practice with typed or voice answers, optional OpenRouter TTS question playback, scoring, and performance history. The landing page leads with **My Views** quick-start, then the **QUANT PRACTICE** card: model-note modes (Explain / Defend / Compare / Deep Dive) backed by a read-only Obsidian Models library, plus Quant Fundamentals and an Advanced Setup fallback
 
 ### Data Flow
 
@@ -95,14 +95,15 @@ All component CSS must follow this pattern. Current IDs in use:
 | `app.py` | Entry point, MQ monogram header, global CSS theming (dark/light), 5-tab + secondary-tab routing, import/export/reset/settings dialogs |
 | `config.py` | LLM provider defaults (OpenRouter and OpenCode Go), chat and Practice-TTS model slugs, max tokens, temperature; plus Obsidian default paths and interview fallback notes |
 | `models/schema.py` | Pydantic v2 models: `AppState`, `MacroView`, `AssetView`, `Reconciliation`, `BriefingStrip`, `Trade`, plus `TopicView`, `ViewPoint`, `ViewFact`, `ViewPracticeMeta` |
-| `models/interview.py` | Interview-practice models: `InterviewSession`, `InterviewQuestion`, `InterviewAnswer`, `InterviewPostmortem`, `InterviewDatabase` |
+| `models/interview.py` | Interview-practice models: `InterviewSession`, `InterviewQuestion`, `InterviewAnswer`, `InterviewPostmortem`, `InterviewDatabase` (`InterviewSession` also carries `model_note_ids`/`model_note_titles`/`model_context` for My Models sessions) |
 | `storage/persistence.py` | `load_state()` / `save_state()` — JSON persistence; daily snapshots; schema migration |
 | `storage/user_settings.py` | `data/user_settings.json` persistence (Obsidian paths, LLM provider/API keys/models, and Practice TTS enabled/model preferences) |
-| `storage/interview_store.py` | `data/interview_history.json` persistence + performance summary |
+| `storage/interview_store.py` | `data/interview_history.json` persistence + performance summary + `model_practice_stats()` (per-note practice history) |
 | `storage/fred_client.py` | FRED API client — ~50 macro indicators; ETF data via yfinance |
 | `storage/fed_client.py` | Federal Reserve communications — FOMC statements/minutes/speeches listings, `#article` text extraction, permanent body cache |
 | `storage/research_feeds.py` | Paper feed aggregator (FEDS, FEDS Notes, IFDP, arXiv q-fin) + `data/research_feed.json` read-state persistence |
 | `storage/trade_prices.py` | yfinance price history — both raw close and adj close per ticker |
+| `storage/model_library.py` | Read-only Obsidian Models folder scanner for My Models — `scan_model_notes()`, `models_folder_path()`, `model_context_for()`, `find_comparison_note()`; never writes, malformed files degrade to filename fallback |
 | `services/talking_points.py` | Pure synthesis — `macro_prose()`, `fred_snippet()`, `asset_verbal()` |
 | `services/llm_polish.py` | OpenRouter chat — briefing generation, polish, document summaries (`summarize()`), and disk cache |
 | `services/attribution.py` | View-vs-returns engine — asset benchmark mapping (`ASSET_BENCH`), macro benchmark mapping (`MACRO_BENCH`), score timeline, hit-rate calculation |
@@ -110,8 +111,8 @@ All component CSS must follow this pattern. Current IDs in use:
 | `storage/topic_view_markdown.py` | TopicView Markdown parser/renderer for Obsidian sync |
 | `storage/topic_view_sync.py` | TopicView <-> Obsidian Views folder sync engine and `data/topic_view_sync.json` persistence |
 | `services/interview_llm.py` | Provider-neutral LLM client for interview practice |
-| `services/interview_controller.py` | Interview session state machine — `start_session()`, `evaluate_answer()`, `advance_session()`; compact non-final evaluation schema, final-only postmortem, one malformed-JSON recovery |
-| `services/interview_prompts.py` | Versioned prompt pack (`PROMPT_PACK_VERSION`) + built-in presets |
+| `services/interview_controller.py` | Interview session state machine — `start_session()`, `evaluate_answer()`, `advance_session()`; compact non-final evaluation schema, final-only postmortem, one malformed-JSON recovery; `start_session()` accepts model-note metadata + hidden `model_context` |
+| `services/interview_prompts.py` | Versioned prompt pack (`PROMPT_PACK_VERSION`) + built-in presets, including four model-note presets (`model_explain`/`model_defend`/`model_compare`/`model_deep_dive`, all Drill mode) and `QUANT_FUNDAMENTALS_OPENERS` |
 | `services/interview_speech.py` | Local faster-whisper transcription server + `/api/interview/transcribe` route |
 | `services/interview_speech_worker.py` | Isolated whisper worker subprocess |
 | `services/interview_tts.py` | OpenRouter TTS proxy + `/api/interview/tts` route; per-model voice/capability mapping, safe voice fallback, and Gemini PCM-to-MP3 conversion |
@@ -129,7 +130,7 @@ All component CSS must follow this pattern. Current IDs in use:
 | `components/research_feed.py` | Papers tab — merged feed list, unread/all filter, mark-read state |
 | `components/trades.py` | Trade Tracker tab — add/close/delete ETF positions, price return vs total return |
 | `components/attribution.py` | Attribution tab — echarts timeline, score analysis, streak badges |
-| `components/interview_practice.py` | Practice tab UI — setup, sparring loop, keyboard shortcuts, exit confirmation, draft-only answer tips, optional question TTS controls, postmortem, performance stats |
+| `components/interview_practice.py` | Practice tab UI — My Views-first landing, QUANT PRACTICE card with searchable My Models library (one click per mode starts a session), Quant Fundamentals quick-start, Advanced Setup fallback, sparring loop, keyboard shortcuts, exit confirmation, draft-only answer tips, optional question TTS controls, postmortem, performance stats |
 | `components/interview_speech.py` | Browser-side recorder glue for voice answers |
 | `components/interview_tts.py` | Browser playback glue for server-generated Practice question audio |
 | `export/excel.py` | Multi-sheet Excel workbook — macro views, asset views, reconciliations |
@@ -192,6 +193,7 @@ All component CSS must follow this pattern. Current IDs in use:
 - **Fed doc bodies never change once published** — `fed_client.document_body()` caches them permanently to `data/fed_cache/<hash>.txt`; only the RSS listings re-fetch.
 - **Schema Migration** — `persistence.py` `_migrate()` handles old `state.json` gracefully, seeds `topic_views_version`, and migrates legacy asset directions to 1-5 scores.
 - **Interview History** — Practice sessions are persisted separately in `data/interview_history.json`. Sessions can be `active`, `completed`, or `abandoned`; exiting an in-progress session preserves any submitted answers but does not count it as completed or update My View practice metadata.
+- **My Models** — Quant Practice adds Explain / Defend / Compare / Deep Dive modes powered by read-only interview-facing model notes in an Obsidian folder; notes are hidden LLM context, never rewritten by the app, and nothing breaks when the folder is unavailable. See "Quant Model Notes (My Models)" below.
 - **Practice feedback contract** — Ordinary turns request only score/tags/critique and one next question. A full postmortem is requested only on the final turn. One malformed structured response triggers a compact retry; a second fails clearly without saving a partial turn.
 - **Practice draft tips** — **Get Answer Tips** is a separate, plain-text coaching call on the unsaved current draft. It returns exactly three actionable tips (structure, reasoning/mechanism, evidence/caveat), never scores, saves, or advances the answer. Stored View content is optional secondary context only and may be stale; it must never be treated as authoritative or forced into an answer.
 - **Practice keyboard flow** — `Ctrl/Cmd+Enter` submits an answer (or advances from Drill feedback); `Alt+M` starts/stops voice recording. Bare Enter and Space remain available for writing, and replay remains button-only to avoid browser shortcut conflicts.
@@ -221,6 +223,18 @@ My Views can optionally sync bidirectionally with a dedicated Obsidian Views fol
 - **View editor apply model** — The TopicView editor edits a deep-copied draft; nothing persists until **Apply Changes** (sticky bar at the top lists exactly which fields changed). Discard reverts the draft; leaving the editor with unsaved changes prompts first. Overview-level actions (new/delete/reorder topic) still persist immediately since each is itself an explicit click. Archiving lives only at the bottom of the View editor behind a confirm dialog (blocked while the draft has unsaved edits); restoring happens via a Restore button on cards in the Archived expansion — there is no one-click archive on active cards.
 - **Sync state** — Lightweight sync metadata (content hashes, `updated_at`, conflict status) is stored in `data/topic_view_sync.json`, not inside the user's Markdown notes.
 
+### Quant Model Notes (My Models)
+
+Quant Practice reads interview-facing model notes from a personal Obsidian Models folder and uses them as hidden context for technique practice. This is intentionally simpler than the My Views sync — the folder is **read-only**; Obsidian owns the Markdown and the app never rewrites it.
+
+- **Config** — "Quant Models Folder" user setting (`storage/user_settings.py::quant_models_folder()`), defaulting to `config.OBSIDIAN_MODELS_FOLDER_DEFAULT`. Override with `QUANT_MODELS_FOLDER`. The app starts and generic Quant Drill works even when the folder is missing or empty; My Models just shows a setup/empty state. This keeps a future work-computer copy without the vault fully functional.
+- **Discovery** — `storage/model_library.py::scan_model_notes()` finds Markdown files and derives title (frontmatter `title` > first H1 > filename), path, tags, `status`/`priority`, kind, mtime, and raw body — no LLM, no shared heading schema. Index notes and `_`-prefixed/`.`-hidden paths are skipped; malformed YAML or an unclosed fence degrades only that one file to a filename title with a warning and leaves the bytes untouched. Titles/ids trim a trailing "Interview" suffix.
+- **Usage** — Notes are rendered by `model_context_for()` into a single hidden `# MODEL REFERENCE NOTES` block passed to `start_session()` as `model_context`; it is composed into the system prompt only. All four modes (**Explain / Defend / Compare / Deep Dive**) reuse the existing **Drill** engine, voice/TTS, scoring, and failure-tag system — no parallel practice engine or analytics. **Compare** auto-attaches a dedicated "A vs B" note via `find_comparison_note()` (title-word / tag / acronym matching) when one exists.
+- **Never fabricate experience** — Model prompts forbid inventing the candidate's datasets, results, hyperparameters, or projects; the note describes the technique, and "How did you use this?" is answered by the user and evaluated normally.
+- **History** — `InterviewSession` stores `model_note_ids` / `model_note_titles` / `model_context` and `practice_style`; `storage/interview_store.py::model_practice_stats()` powers the per-note "Last practiced…" line for future reporting. No dedicated dashboard yet.
+- **Refresh** — The library rescans each time the Practice home / model library renders and on the explicit **Refresh Models** button; no filesystem watcher and no background sync.
+- **Quant Fundamentals stays separate** — The generic Quant Drill answers "can I handle general quant questions?"; My Models answers "can I explain and defend techniques I claim to know?" Both coexist.
+
 ### Environment Variables
 
 | Variable | Required | Purpose |
@@ -243,6 +257,7 @@ My Views can optionally sync bidirectionally with a dedicated Obsidian Views fol
 | `MQLEDGER_LLM_PROVIDER` | Optional | `openrouter` (default) or `opencode_go`; overrides Settings |
 | `OBSIDIAN_EXPORT_PATH` | Optional | Override Obsidian export folder |
 | `OBSIDIAN_VIEWS_FOLDER` | Optional | Override Obsidian Views folder for bidirectional My Views sync |
+| `QUANT_MODELS_FOLDER` | Optional | Override read-only Obsidian Models folder powering Practice "My Models" (falls back to Settings, then `config.OBSIDIAN_MODELS_FOLDER_DEFAULT`) |
 | `MQLEDGER_PORT` | Optional | App port (default `8080`) |
 | `MQLEDGER_HOST` | Optional | App bind host (default `127.0.0.1`) |
 | `INTERVIEW_API_KEY` | Optional | API key for interview LLM |
@@ -282,5 +297,5 @@ data/
 ### Documentation Notes
 
 - **`CLAUDE.md` is now stale.** It still describes a 6-tab layout, 15 asset views, a hardcoded Obsidian path, and `SPEC.md` as authoritative. Do not trust it for current structure.
-- **`check_syntax.py` checks 41 files** (38 before the Fed Watch / Papers tabs were added).
+- **`check_syntax.py` checks 44 files** (41 before My Models / `storage/model_library.py` were added).
 - **Trust actual source code** over any markdown documentation.

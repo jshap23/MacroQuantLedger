@@ -1,7 +1,9 @@
-"""Active interview practice UI: setup, sparring loop, and performance view."""
+"""Active interview practice UI: setup, quant model library, sparring loop, and performance view."""
 from __future__ import annotations
 
 import random
+from datetime import date
+from pathlib import Path
 
 from nicegui import run, ui
 
@@ -10,14 +12,20 @@ from services.interview_controller import (
 )
 from services.interview_llm import available as llm_available, interview_model, selectable_models
 from services.interview_prompts import (
-    PRESETS, PROMPT_PACK_VERSION, built_in_prompt, get_preset,
+    PRESETS, PROMPT_PACK_VERSION, QUANT_FUNDAMENTALS_OPENERS,
+    built_in_prompt, get_preset,
 )
 from components.interview_speech import (
     cancel_recording, start_recording, stop_recording,
 )
 from components.interview_tts import speak_question, stop_speaking
 from storage.interview_store import (
-    load_database, performance_summary, preferred_model, save_preferred_model,
+    load_database, model_practice_stats, performance_summary,
+    preferred_model, save_preferred_model,
+)
+from storage.model_library import (
+    ModelNote, find_comparison_note, model_context_for, models_folder_path,
+    scan_model_notes,
 )
 from storage.user_settings import (
     interview_tts_enabled, interview_tts_model, save_interview_tts_enabled,
@@ -34,6 +42,58 @@ MODE_HELP = {
     "Simulation": "A realistic interview with no coaching until the final postmortem.",
     "Research Defense": "Hostile scrutiny of a thesis, model, project, presentation, or resume claim.",
 }
+
+_MODEL_MODE_LABELS = {
+    "explain": "Explain",
+    "defend": "Defend",
+    "compare": "Compare",
+    "deep_dive": "Deep Dive",
+}
+_MODEL_ROW_MODES = ("explain", "defend", "deep_dive")
+_MODEL_PRESET_MODES = {f"model_{mode}": mode for mode in _MODEL_MODE_LABELS}
+_MODEL_OPENERS = {
+    "explain": "Walk me through {title}.",
+    "defend": "Tell me why you would choose {title} over the obvious alternative.",
+    "deep_dive": "Let's go deep on {title}: what exactly is it optimizing?",
+}
+
+
+def _model_opener(mode: str, title: str) -> str:
+    return _MODEL_OPENERS[mode].format(title=title)
+
+
+def _compare_opener(a: ModelNote, b: ModelNote) -> str:
+    return (
+        f"I know both {a.title} and {b.title}. What is the real difference, "
+        "and when would you pick one over the other?"
+    )
+
+
+def _library_status_text(folder: Path | None, notes: list[ModelNote]) -> str:
+    if folder is None:
+        return "No Models folder configured — set it in ··· → Settings."
+    if not folder.exists():
+        return f"Models folder unavailable: {folder} — generic practice still works."
+    return f"{len(notes)} notes · {folder}"
+
+
+def _model_stats_line(entry: dict | None) -> str:
+    by_style = (entry or {}).get("by_style") or {}
+    dated = [(style, info) for style, info in by_style.items() if info.get("last")]
+    if not dated:
+        return "Not practiced yet"
+    _, latest_info = max(dated, key=lambda item: item[1]["last"])
+    days = max(0, (date.today() - latest_info["last"]).days)
+    when = "today" if days == 0 else f"{days} day{'s' if days != 1 else ''} ago"
+    scored = [
+        (style, info["avg_score"])
+        for style, info in by_style.items()
+        if info.get("avg_score") is not None
+    ]
+    if scored:
+        best_style, best_avg = max(scored, key=lambda item: item[1])
+        return f"Last practiced {when} · best: {best_style} {best_avg:g}/10"
+    return f"Last practiced {when}"
 
 
 def _inject_css() -> None:
@@ -100,6 +160,15 @@ def _inject_css() -> None:
         .interview-quick .q-btn__content {
             align-items:flex-start; text-align:left; white-space:pre-line;
         }
+        .interview-quant-row {
+            display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.55rem;
+        }
+        .interview-model-row {
+            display:flex; align-items:center; justify-content:space-between; gap:0.75rem;
+            flex-wrap:wrap; border:1px solid var(--border); border-radius:6px;
+            padding:0.65rem 0.8rem; margin-bottom:0.5rem; background:var(--bg-input);
+        }
+        .interview-model-tags { color:var(--text-muted); font-size:0.68rem; }
         @media (max-width:640px) {
             .interview-card { padding:0.9rem; }
             .interview-question { padding:1rem 0 1.2rem; }
@@ -119,7 +188,11 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
         "retrying": False,
         "weakness_setup": False,
         "selected_preset": None,
+        "advanced_setup": False,
         "view_setup": None,
+        "models_setup": None,
+        "quant_session_note": None,
+        "compare_sel": [],
         "review_view": review_view,
         "app_state": app_state,
         "tts_enabled": interview_tts_enabled(),
@@ -135,6 +208,8 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
             if session is None:
                 if state["view_setup"]:
                     _render_view_setup(state, refresh, app_state)
+                elif state["models_setup"]:
+                    _render_model_library(state, refresh)
                 else:
                     _render_home(state, refresh, app_state)
             elif session.status == "completed":
@@ -160,7 +235,7 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
                 "font-size:1.15rem; font-weight:700; color:var(--text-primary);"
             )
         primary_action = ui.button(
-            "Surprise Me" if active_views else "Start Practicing",
+            "Surprise Me (Views)" if active_views else "Start Practicing",
             icon="shuffle" if active_views else "psychology",
         ).classes("submit-btn")
 
@@ -184,6 +259,8 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
     if active_views:
         _render_views_quick_start(state, refresh, app_state)
 
+    _render_quant_practice_card(state, refresh)
+
     active = next((s for s in load_database().sessions if s.status == "active" and s.questions), None)
     if active:
         active_preset = get_preset(active.preset_key, active.mode)
@@ -204,29 +281,290 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
 
             ui.button("Resume Session", on_click=resume).classes("submit-btn").style("margin-top:0.7rem;")
 
-    ui.label("QUICK START").classes("interview-kicker").style("margin:0.4rem 0 0.65rem;")
-    with ui.row().style("gap:0.75rem; width:100%; align-items:stretch; flex-wrap:wrap; margin-bottom:1rem;"):
-        for preset in (item for key, item in PRESETS.items() if not key.startswith("view_")):
-            def select_preset(_, key=preset.key) -> None:
-                state["selected_preset"] = key
-                state["weakness_setup"] = key == "weaknesses"
-                refresh()
+    if state["advanced_setup"]:
+        ui.label("ADVANCED SETUP · ALL MODES").classes("interview-kicker").style("margin:0.4rem 0 0.65rem;")
+        with ui.row().style("gap:0.75rem; width:100%; align-items:stretch; flex-wrap:wrap; margin-bottom:1rem;"):
+            for preset in (
+                item for key, item in PRESETS.items()
+                if not key.startswith("view_") and not key.startswith("model_")
+            ):
+                def select_preset(_, key=preset.key) -> None:
+                    state["selected_preset"] = key
+                    state["weakness_setup"] = key == "weaknesses"
+                    refresh()
 
-            ui.button(
-                f"{preset.label}\n{preset.description}",
-                on_click=select_preset,
-            ).classes("interview-quick").props("no-caps flat")
+                ui.button(
+                    f"{preset.label}\n{preset.description}",
+                    on_click=select_preset,
+                ).classes("interview-quick").props("no-caps flat")
 
     if state["selected_preset"]:
         _render_setup(state, refresh)
     _render_performance(summary)
 
 
+def _render_quant_practice_card(state: dict, refresh) -> None:
+    notes = scan_model_notes()
+    status_text = _library_status_text(models_folder_path(), notes)
+
+    def open_library(mode: str) -> None:
+        state["models_setup"] = {"mode": mode}
+        if mode == "compare":
+            state["compare_sel"] = []
+        refresh()
+
+    async def start_fundamentals() -> None:
+        if not llm_available():
+            status.set_text("Configure an LLM provider and API key in Settings, then restart the app.")
+            return
+        fundamentals_btn.disable()
+        fundamentals_btn.set_text("Preparing first question…")
+        preset = get_preset("quant_drill")
+        chosen_model = preferred_model() or interview_model()
+        save_preferred_model(chosen_model)
+        try:
+            session = await run.io_bound(lambda: start_session(
+                mode=preset.mode, preset_key=preset.key,
+                topic="Quant fundamentals",
+                initial_question=random.choice(QUANT_FUNDAMENTALS_OPENERS),
+                practice_style="Fundamentals",
+                target_questions=preset.default_questions,
+                model=chosen_model,
+            ))
+        except Exception as exc:
+            status.set_text(f"Could not start: {exc}")
+            fundamentals_btn.enable()
+            fundamentals_btn.set_text("Quant Fundamentals")
+            return
+        state.update(session=session, pending=None, retrying=False)
+        refresh()
+
+    async def surprise_quant() -> None:
+        if not notes:
+            await start_fundamentals()
+            return
+        note = random.choice(notes)
+        mode = random.choice(_MODEL_ROW_MODES)
+        preset = get_preset(f"model_{mode}")
+        await _start_model_session(
+            state, refresh,
+            preset_key=preset.key, topic=note.title,
+            initial_question=_model_opener(mode, note.title),
+            notes=[note], style=_MODEL_MODE_LABELS[mode],
+            target_questions=preset.default_questions,
+            button=surprise_btn, status=status, button_label="Surprise Me (Quant)",
+        )
+
+    with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
+        ui.label("QUANT PRACTICE").classes("interview-kicker")
+        ui.label("Pick one of your model notes and start speaking in seconds — explain, defend, compare, or go deep.").classes(
+            "interview-meta"
+        ).style("margin:.3rem 0 .7rem;")
+        with ui.row().classes("interview-quant-row"):
+            ui.label("MY MODELS").classes("interview-kicker").style("min-width:5.4rem;")
+            for mode, label in (
+                ("explain", "Explain My Model"), ("defend", "Defend My Model"),
+                ("compare", "Compare Models"), ("deep_dive", "Deep Dive"),
+            ):
+                model_btn = ui.button(label, on_click=lambda _, m=mode: open_library(m)).props("no-caps")
+                if not notes:
+                    model_btn.disable()
+            ui.space()
+            ui.button("Refresh Models", icon="refresh", on_click=lambda: refresh()).props(
+                "flat dense no-caps"
+            ).style("color:var(--text-muted);font-size:.72rem;")
+        ui.label(status_text).classes("interview-meta").style("margin-bottom:.35rem;")
+        with ui.row().classes("interview-quant-row"):
+            ui.label("GENERAL").classes("interview-kicker").style("min-width:5.4rem;")
+            fundamentals_btn = ui.button("Quant Fundamentals", on_click=start_fundamentals).props("no-caps")
+            surprise_btn = ui.button(
+                "Surprise Me (Quant)", icon="shuffle", on_click=surprise_quant,
+            ).props("no-caps")
+        with ui.row().classes("interview-quant-row"):
+            ui.label("CUSTOM").classes("interview-kicker").style("min-width:5.4rem;")
+            ui.button("Advanced Setup", icon="tune", on_click=lambda: (state.update(advanced_setup=True), refresh())).props("no-caps")
+        status = ui.label("").style("color:#f87171; font-size:.75rem; min-height:1rem; margin-top:.3rem;")
+
+
+async def _start_model_session(
+    state: dict, refresh, *, preset_key: str, topic: str, initial_question: str,
+    notes: list[ModelNote], style: str, target_questions: int,
+    button=None, status=None, button_label: str = "Start",
+) -> None:
+    if not llm_available():
+        if status is not None:
+            status.set_text("Configure an LLM provider and API key in Settings, then restart the app.")
+        return
+    chosen_model = preferred_model() or interview_model()
+    save_preferred_model(chosen_model)
+    if button is not None:
+        button.disable()
+        button.set_text("Preparing first question…")
+    try:
+        session = await run.io_bound(lambda: start_session(
+            mode="Drill", preset_key=preset_key, topic=topic,
+            initial_question=initial_question,
+            model_note_ids=[note.id for note in notes],
+            model_note_titles=[note.title for note in notes],
+            model_context=model_context_for(notes),
+            practice_style=style,
+            target_questions=target_questions,
+            model=chosen_model,
+        ))
+    except Exception as exc:
+        if status is not None:
+            status.set_text(f"Could not start: {exc}")
+        if button is not None:
+            button.enable()
+            button.set_text(button_label)
+        return
+    state.update(session=session, pending=None, retrying=False, models_setup=None)
+    refresh()
+
+
+def _render_model_library(state: dict, refresh) -> None:
+    setup = state["models_setup"] or {}
+    mode = setup.get("mode", "explain")
+    notes = scan_model_notes()
+    status_text = _library_status_text(models_folder_path(), notes)
+    stats = model_practice_stats()
+    highlight_id = state.get("quant_session_note")
+    state["quant_session_note"] = None
+
+    def go_back() -> None:
+        state.update(models_setup=None, quant_session_note=None, compare_sel=[])
+        refresh()
+
+    def render_compare_bar() -> None:
+        by_id = {note.id: note for note in notes}
+        pair = [by_id[note_id] for note_id in state["compare_sel"] if note_id in by_id]
+        if len(pair) < 2:
+            ui.label("Select two models to compare.").classes("interview-meta")
+            return
+        a, b = pair
+        preset = get_preset("model_compare")
+
+        async def begin() -> None:
+            context_notes = [a, b]
+            comparison = find_comparison_note(notes, a, b)
+            if comparison is not None:
+                context_notes.append(comparison)
+            await _start_model_session(
+                state, refresh,
+                preset_key=preset.key, topic=f"{a.title} vs {b.title}",
+                initial_question=_compare_opener(a, b),
+                notes=context_notes, style=_MODEL_MODE_LABELS["compare"],
+                target_questions=preset.default_questions,
+                button=begin_btn, status=status, button_label="Begin Compare",
+            )
+
+        with ui.row().style("gap:.55rem;align-items:center;margin-bottom:.6rem;flex-wrap:wrap;"):
+            begin_btn = ui.button("Begin Compare", icon="play_arrow", on_click=begin).classes("submit-btn")
+            ui.label(f"{a.title} vs {b.title}").classes("interview-meta")
+
+    def render_note_row(note: ModelNote) -> None:
+        with ui.element("div").classes("interview-model-row") as row:
+            if note.id == highlight_id:
+                row.style("border-color:var(--accent);")
+            with ui.column().style("gap:.12rem;flex:1;min-width:240px;"):
+                ui.label(note.title).style("font-size:1rem;font-weight:700;color:var(--text-primary);")
+                if note.display_tags:
+                    ui.label(" · ".join(note.display_tags)).classes("interview-model-tags")
+                meta_parts = [
+                    part for part in (
+                        note.priority, note.status,
+                        f"updated {note.updated_display}" if note.updated_display else "",
+                    ) if part
+                ]
+                ui.label(" · ".join(meta_parts)).classes("interview-meta")
+                ui.label(_model_stats_line(stats.get(note.id))).classes("interview-meta")
+                if note.parse_warning:
+                    ui.label(note.parse_warning).style("color:#f59e0b;font-size:.68rem;")
+            if mode == "compare":
+                selected = note.id in state["compare_sel"]
+
+                def toggle_selection(_, target=note) -> None:
+                    selection = state["compare_sel"]
+                    if target.id in selection:
+                        selection.remove(target.id)
+                    else:
+                        selection.append(target.id)
+                        if len(selection) > 2:
+                            selection.pop(0)
+                    rebuild()
+
+                ui.button(
+                    icon="check_box" if selected else "check_box_outline_blank",
+                    on_click=toggle_selection,
+                ).props("flat dense").style("color:var(--accent);")
+            else:
+                for row_mode in _MODEL_ROW_MODES:
+                    action_btn = ui.button(_MODEL_MODE_LABELS[row_mode]).props(
+                        "flat dense no-caps"
+                    ).style("color:var(--accent);font-size:.72rem;")
+
+                    async def launch_action(_, target=action_btn, note_ref=note, row_variant=row_mode) -> None:
+                        preset = get_preset(f"model_{row_variant}")
+                        await _start_model_session(
+                            state, refresh,
+                            preset_key=preset.key, topic=note_ref.title,
+                            initial_question=_model_opener(row_variant, note_ref.title),
+                            notes=[note_ref], style=_MODEL_MODE_LABELS[row_variant],
+                            target_questions=preset.default_questions,
+                            button=target, status=status,
+                            button_label=_MODEL_MODE_LABELS[row_variant],
+                        )
+
+                    action_btn.on("click", launch_action)
+
+    with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
+        with ui.row().style("justify-content:space-between;align-items:center;width:100%;gap:.6rem;flex-wrap:wrap;"):
+            ui.label(f"MY MODELS · {_MODEL_MODE_LABELS[mode]}").classes("interview-kicker")
+            with ui.row().style("gap:.4rem;"):
+                ui.button("Refresh Models", icon="refresh", on_click=lambda: refresh()).props(
+                    "flat dense no-caps"
+                ).style("color:var(--text-muted);font-size:.72rem;")
+                ui.button("Back", icon="arrow_back", on_click=go_back).props(
+                    "flat dense no-caps"
+                ).style("color:var(--text-muted);font-size:.72rem;")
+        ui.label(status_text).classes("interview-meta").style("margin:.25rem 0 .6rem;")
+        status = ui.label("").style("color:#f87171; font-size:.75rem; min-height:1rem;")
+        if not notes:
+            ui.label(
+                "No model notes are available, so model practice is disabled here. "
+                "The drills under GENERAL on the Practice home still work."
+            ).classes("interview-list-item")
+            return
+        search = ui.input(placeholder="Filter by title or tag…").classes("w-full dark-input").props("dense")
+        compare_bar = ui.element("div")
+        listing = ui.element("div")
+
+        def rebuild() -> None:
+            query = (search.value or "").strip().lower()
+            matches = [
+                note for note in notes
+                if not query
+                or query in note.title.lower()
+                or any(query in tag.lower() for tag in note.tags)
+            ]
+            compare_bar.clear()
+            listing.clear()
+            with compare_bar:
+                if mode == "compare":
+                    render_compare_bar()
+            with listing:
+                for note in matches:
+                    render_note_row(note)
+
+        search.on("update:model-value", lambda: rebuild())
+        rebuild()
+
+
 def _render_views_quick_start(state: dict, refresh, app_state) -> None:
     active = [view for view in app_state.topic_views if not view.archived]
     if not active:
         return
-    with ui.element("div").classes("interview-card").style("border-color:var(--accent);margin-top:.9rem"):
+    with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
         ui.label("PRACTICE FROM · MY VIEWS").classes("interview-kicker")
         ui.label("Select one View or several for a mixed session. Stored structure is passed automatically.").classes("interview-meta").style("margin:.3rem 0 .7rem")
         options = {view.id: view.name for view in active}
@@ -870,6 +1208,74 @@ def _render_postmortem(session, state: dict, refresh) -> None:
             if state.get("review_view") and len(session.view_ids) == 1:
                 ui.button("Review This View", icon="edit_note", on_click=lambda: state["review_view"](session.view_ids[0])).classes("cancel-btn")
         ui.button("Start Another Session", on_click=new_session).classes("cancel-btn" if session.view_ids else "submit-btn")
+
+    if session.model_note_ids:
+        mode = _MODEL_PRESET_MODES.get(session.preset_key, "")
+        if mode:
+            pm_status = ui.label("").style("color:#f87171; font-size:.75rem; min-height:1rem; margin-top:.4rem;")
+
+            def back_to_library() -> None:
+                state.update(
+                    session=None, pending=None, retrying=False,
+                    models_setup={"mode": mode},
+                    quant_session_note=session.model_note_ids[0],
+                    compare_sel=list(session.model_note_ids[:2]),
+                )
+                refresh()
+
+            def resolve_notes() -> list[ModelNote] | None:
+                try:
+                    scanned = {note.id: note for note in scan_model_notes()}
+                    return [scanned[note_id] for note_id in session.model_note_ids]
+                except Exception:
+                    return None
+
+            with ui.row().style("gap:.55rem;flex-wrap:wrap;margin-top:.5rem;"):
+                again_btn = ui.button("Try Again").classes("submit-btn")
+
+                async def retry_again(_, target=again_btn) -> None:
+                    picked = resolve_notes()
+                    if not picked or (mode == "compare" and len(picked) < 2):
+                        back_to_library()
+                        return
+                    if mode == "compare":
+                        topic = f"{picked[0].title} vs {picked[1].title}"
+                        opener = _compare_opener(picked[0], picked[1])
+                    else:
+                        topic = picked[0].title
+                        opener = _model_opener(mode, picked[0].title)
+                    await _start_model_session(
+                        state, refresh,
+                        preset_key=preset.key, topic=topic, initial_question=opener,
+                        notes=picked, style=session.practice_style or _MODEL_MODE_LABELS[mode],
+                        target_questions=preset.default_questions,
+                        button=target, status=pm_status, button_label="Try Again",
+                    )
+
+                again_btn.on("click", retry_again)
+                if mode != "compare" and len(session.model_note_ids) == 1:
+                    for other_mode in _MODEL_ROW_MODES:
+                        if other_mode == mode:
+                            continue
+                        switch_btn = ui.button(_MODEL_MODE_LABELS[other_mode]).classes("cancel-btn")
+
+                        async def switch_mode(_, target=switch_btn, variant=other_mode) -> None:
+                            picked = resolve_notes()
+                            if not picked:
+                                back_to_library()
+                                return
+                            other_preset = get_preset(f"model_{variant}")
+                            await _start_model_session(
+                                state, refresh,
+                                preset_key=other_preset.key, topic=picked[0].title,
+                                initial_question=_model_opener(variant, picked[0].title),
+                                notes=picked, style=_MODEL_MODE_LABELS[variant],
+                                target_questions=other_preset.default_questions,
+                                button=target, status=pm_status,
+                                button_label=_MODEL_MODE_LABELS[variant],
+                            )
+
+                        switch_btn.on("click", switch_mode)
 
 
 def _sync_view_metadata(app_state, view_ids: list[str]) -> None:

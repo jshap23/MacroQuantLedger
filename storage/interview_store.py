@@ -159,3 +159,48 @@ def mark_review(question, score: int | None, tags: list[str], is_retry: bool) ->
         question.review_priority = min(5, question.review_priority + 1)
         delay = 2 if question.review_priority >= 3 else 7
         question.next_review_date = date.today() + timedelta(days=delay)
+
+
+def model_practice_stats() -> dict[str, dict]:
+    """Per-note practice history for model-note practice sessions."""
+    notes: dict[str, dict] = {}
+    for session in load_database().sessions:
+        if not session.model_note_ids:
+            continue
+        session_day = session.started_at.date()
+        scores = [
+            answer.score
+            for question in session.questions
+            for answer in question.answers
+            if answer.score is not None
+        ]
+        for note_id in session.model_note_ids:
+            note = notes.setdefault(note_id, {"last": None, "sessions": 0, "styles": {}})
+            if note["last"] is None or session_day > note["last"]:
+                note["last"] = session_day
+            note["sessions"] += 1
+            style = note["styles"].setdefault(
+                session.practice_style, {"last": None, "count": 0, "scores": []},
+            )
+            if style["last"] is None or session_day > style["last"]:
+                style["last"] = session_day
+            style["count"] += 1
+            style["scores"].extend(scores)
+    return {
+        note_id: {
+            "last_practiced": note["last"],
+            "sessions": note["sessions"],
+            "by_style": {
+                style: {
+                    "last": data["last"],
+                    "avg_score": (
+                        round(sum(data["scores"]) / len(data["scores"]), 1)
+                        if data["scores"] else None
+                    ),
+                    "count": data["count"],
+                }
+                for style, data in note["styles"].items()
+            },
+        }
+        for note_id, note in notes.items()
+    }

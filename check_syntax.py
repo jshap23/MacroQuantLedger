@@ -10,6 +10,7 @@ files = [
     'storage/research_feeds.py',
     'storage/trade_prices.py',
     'storage/interview_store.py',
+    'storage/model_library.py',
     'storage/user_settings.py',
     'services/talking_points.py',
     'services/llm_polish.py',
