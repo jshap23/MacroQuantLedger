@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from collections import deque
 from datetime import date
 from pathlib import Path
 
@@ -94,6 +95,21 @@ def _model_stats_line(entry: dict | None) -> str:
         best_style, best_avg = max(scored, key=lambda item: item[1])
         return f"Last practiced {when} · best: {best_style} {best_avg:g}/10"
     return f"Last practiced {when}"
+
+
+_RECENT_PICK_MEMORY = 3
+_recent_picks: dict[str, deque[str]] = {}
+
+
+def _pick_recent(pool: list, bucket: str):
+    """Draw uniformly from pool, avoiding the most recent picks it can spare."""
+    recent = _recent_picks.setdefault(bucket, deque(maxlen=_RECENT_PICK_MEMORY))
+    avoidable = min(len(recent), max(0, len(pool) - 1))
+    blocked = set(list(recent)[len(recent) - avoidable:]) if avoidable else set()
+    candidates = [item for item in pool if item.id not in blocked] or list(pool)
+    chosen = random.choice(candidates)
+    recent.append(chosen.id)
+    return chosen
 
 
 def _inject_css() -> None:
@@ -255,7 +271,7 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
 
     def surprise() -> None:
         """Pick one active My View and open a ready-to-start practice session."""
-        selected = random.choice(active_views)
+        selected = _pick_recent(active_views, "views")
         state["view_setup"] = {
             "ids": [selected.id],
             "style": "Deliver",
@@ -352,7 +368,7 @@ def _render_quant_practice_card(state: dict, refresh) -> None:
         if not notes:
             await start_fundamentals()
             return
-        note = random.choice(notes)
+        note = _pick_recent(notes, "quant_notes")
         mode = random.choice(_MODEL_ROW_MODES)
         preset = get_preset(f"model_{mode}")
         await _start_model_session(
@@ -605,7 +621,7 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
         if not pool:
             return
         state["view_setup"] = {
-            "ids": [random.choice(pool).id],
+            "ids": [_pick_recent(pool, "views").id],
             "style": style,
             "surprise": True,
         }
