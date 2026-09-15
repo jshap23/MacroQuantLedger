@@ -287,6 +287,11 @@ data/
     └── numpy/              # Isolated NumPy runtime for whisper (gitignored)
 ```
 
+### Known Issues & Constraints
+
+- **Reasoning models starve compact budgets** — `max_tokens` is a *combined* budget: hidden reasoning tokens are charged against it before any visible content is emitted. With the compact budgets used here, reasoning consumes the whole allowance and the call returns **empty content**, not an error. Every interview and polish call therefore disables reasoning via `extra_body={"reasoning": {"enabled": False}}` — `extra_body` specifically, because the OpenAI SDK has no `**kwargs` and rejects a plain `reasoning=` kwarg with `TypeError`. **Raising the budget is not a fix**: `tencent/hy4-preview` burned 1500 tokens on reasoning and still returned nothing. Tell-tale symptoms if this regresses: *"malformed structured feedback twice"* in Practice, blank **Get Answer Tips**, or empty Briefing text.
+- **OpenCode Go may be unusable — parked, not investigated** — `POST https://opencode.ai/zen/go/v1/chat/completions` returns `400 MissingSessionID` (*"Request is missing x-opencode-session"*) and the app sends no such header. Separately, the configured `OPENCODE_API_KEY` is **suspected stale**; verify/replace the key before investigating the header, since a key problem would mask it. Practice was confirmed to be running on OpenRouter, so this does not currently affect the reported Practice failures.
+
 ### Deprecated / Removed
 
 - **Bull/Bear icons** — No longer rendered in the UI. The `_BULL_SVG` and `_BEAR_SVG` constants still exist in `app.py` as unused dead code.
