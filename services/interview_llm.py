@@ -115,16 +115,28 @@ class OpenAICompatibleProvider:
             "max_tokens": options.max_tokens,
             "temperature": options.temperature,
         }
+        # Reasoning models spend max_tokens on hidden reasoning before emitting
+        # any content, leaving these compact turns empty and unparseable. The
+        # OpenAI SDK forwards extra_body verbatim and rejects unknown kwargs.
+        kwargs["extra_body"] = {"reasoning": {"enabled": False}}
         if options.json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         try:
             response = self.client.chat.completions.create(**kwargs)
         except Exception as exc:
-            # Retry only when the compatibility problem is specifically JSON
-            # response formatting; never duplicate auth/network/rate-limit calls.
-            if "response_format" not in str(exc).lower() and "json_object" not in str(exc).lower():
+            # Some endpoints reject these optional hints instead of ignoring
+            # them; drop only the rejected one, retry once, and never duplicate
+            # auth, network, or rate-limit calls.
+            lowered = str(exc).lower()
+            dropped = False
+            if "reasoning" in lowered and "extra_body" in kwargs:
+                kwargs.pop("extra_body")
+                dropped = True
+            if ("response_format" in lowered or "json_object" in lowered) and "response_format" in kwargs:
+                kwargs.pop("response_format")
+                dropped = True
+            if not dropped:
                 raise
-            kwargs.pop("response_format", None)
             response = self.client.chat.completions.create(**kwargs)
         if not response.choices:
             raise RuntimeError("The interview model returned no response.")

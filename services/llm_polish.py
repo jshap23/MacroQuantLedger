@@ -147,16 +147,27 @@ def _chat(
         return None, str(e)
     except Exception as e:
         return None, f"{provider_label} client init failed: {type(e).__name__}: {e}"[:800]
+    kwargs = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": _temperature(),
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=_temperature(),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
+        try:
+            # Reasoning tokens are charged against max_tokens, so leaving
+            # reasoning on spends most of the polish budget before any prose
+            # is written. The SDK forwards extra_body verbatim.
+            resp = client.chat.completions.create(
+                **kwargs, extra_body={"reasoning": {"enabled": False}}
+            )
+        except Exception as exc:
+            if "reasoning" not in str(exc).lower():
+                raise
+            resp = client.chat.completions.create(**kwargs)
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         _log.warning("%s chat failed (model=%s): %s", provider_label, model, err, exc_info=_log.isEnabledFor(logging.DEBUG))
