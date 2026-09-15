@@ -835,12 +835,22 @@ def index():
                             client = OpenAI(api_key=key, base_url=llm_base_url(p))
                             model = or_model_input.value if p == app_config.LLM_PROVIDER_OPENROUTER else og_model_input.value
                             model = model or llm_model(p)
-                            resp = await run.io_bound(
-                                client.chat.completions.create,
-                                model=model,
-                                messages=[{"role": "user", "content": "Say OK"}],
-                                max_tokens=5,
-                            )
+                            probe = {
+                                "model": model,
+                                "messages": [{"role": "user", "content": "Say OK"}],
+                                "max_tokens": 32,
+                            }
+                            try:
+                                # A reasoning model would spend this tiny probe
+                                # budget on hidden reasoning and reply with
+                                # nothing. extra_body carries it past the SDK.
+                                resp = await run.io_bound(
+                                    client.chat.completions.create,
+                                    **probe,
+                                    extra_body={"reasoning": {"enabled": False}},
+                                )
+                            except Exception:
+                                resp = await run.io_bound(client.chat.completions.create, **probe)
                             text = resp.choices[0].message.content or ""
                             test_status.set_text(f"Connected — model replied: {text.strip()[:40]}")
                             test_status.style("color:#4ade80")
