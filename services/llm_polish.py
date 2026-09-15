@@ -34,6 +34,10 @@ def _provider() -> str:
     return user_settings.llm_provider()
 
 
+def _provider_label() -> str:
+    return "OpenRouter" if _provider() == app_config.LLM_PROVIDER_OPENROUTER else "OpenCode Go"
+
+
 def _api_key() -> str:
     return user_settings.llm_api_key(_provider())
 
