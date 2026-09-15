@@ -16,7 +16,7 @@ from services.interview_prompts import (
     built_in_prompt, get_preset,
 )
 from components.interview_speech import (
-    cancel_recording, start_recording, stop_recording,
+    cancel_recording, replay_recording, start_recording, stop_recording,
 )
 from components.interview_tts import speak_question, stop_speaking
 from storage.interview_store import (
@@ -144,6 +144,15 @@ def _inject_css() -> None:
             min-height:1.1rem; color:var(--text-muted); font-size:0.75rem;
             line-height:1.45; font-style:italic;
         }
+        .interview-replay-btn {
+            background:transparent !important; color:#a78bfa !important;
+            border:1px solid #a78bfa55 !important; box-shadow:none !important;
+            font-family:'IBM Plex Mono',monospace !important; font-size:0.72rem !important;
+            border-radius:4px !important; padding:0.2rem 0.7rem !important;
+            min-height:28px !important; line-height:1 !important;
+            text-transform:none !important; letter-spacing:normal !important;
+        }
+        .interview-replay-btn:hover { background:#a78bfa1a !important; }
         .interview-tts-status {
             color:var(--text-faint); font-size:0.68rem; min-height:1rem;
             font-family:'IBM Plex Mono',monospace;
@@ -907,6 +916,7 @@ def _render_session(session, state: dict, refresh) -> None:
             mic.enable()
             stop_btn.visible = False
             cancel_voice_btn.visible = False
+            replay_btn.visible = False
 
         def handle_transcription(result: dict) -> None:
             if result.get("ok"):
@@ -925,6 +935,7 @@ def _render_session(session, state: dict, refresh) -> None:
                 fallback_preview["text"] = ""
                 voice_draft.update(base="", draft="", full="")
                 set_idle(record_more=True)
+                replay_btn.visible = True
                 return
             message = str(result.get("error") or "Transcription failed.")
             recording_status.set_text("Audio retained for recovery")
@@ -937,6 +948,8 @@ def _render_session(session, state: dict, refresh) -> None:
             stop_btn.visible = False
             cancel_voice_btn.visible = True
             cancel_voice_btn.set_text("Discard Recording")
+            # retryable is true only while the browser still holds the audio blob.
+            replay_btn.visible = bool(result.get("retryable"))
             submit_btn.enable()
 
         async def begin_voice() -> None:
@@ -957,6 +970,7 @@ def _render_session(session, state: dict, refresh) -> None:
             voice_active["value"] = True
             recording_panel.visible = True
             recording_status.set_text("Recording 00:00 · pauses are safe")
+            replay_btn.visible = False
             mic.visible = False
             stop_btn.visible = True
             stop_btn.enable()
@@ -992,6 +1006,7 @@ def _render_session(session, state: dict, refresh) -> None:
                 stop_btn.visible = False
                 cancel_voice_btn.visible = True
                 cancel_voice_btn.set_text("Discard Audio")
+                replay_btn.visible = True
                 submit_btn.enable()
             else:
                 handle_transcription(result)
@@ -1012,6 +1027,16 @@ def _render_session(session, state: dict, refresh) -> None:
                 use_preview_btn.visible = False
                 recording_status.set_text("Live captions inserted · audio remains available")
             submit_btn.enable()
+
+        async def replay_voice() -> None:
+            error.set_text("")
+            await stop_speaking()
+            try:
+                result = await replay_recording()
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc)}
+            if not result.get("ok"):
+                error.set_text(str(result.get("error") or "Could not replay the recording."))
 
         async def submit() -> None:
             if submitting["value"]:
@@ -1094,11 +1119,15 @@ def _render_session(session, state: dict, refresh) -> None:
             tips_btn = ui.button("Get Answer Tips", icon="tips_and_updates", on_click=get_tips).classes("cancel-btn")
             mic = ui.button("Speak Answer", icon="mic", on_click=begin_voice).classes("cancel-btn")
             stop_btn = ui.button("Stop & Use Live Draft", icon="stop", on_click=finish_voice).classes("submit-btn")
+            replay_btn = ui.button("Replay", icon="replay", on_click=replay_voice).classes(
+                "interview-replay-btn"
+            ).props("dense no-caps flat")
             cancel_voice_btn = ui.button("Cancel", on_click=discard_voice).classes("cancel-btn")
             use_preview_btn = ui.button("Use Live Captions", on_click=use_preview).classes("cancel-btn")
             stop_btn.visible = False
             cancel_voice_btn.visible = False
             use_preview_btn.visible = False
+            replay_btn.visible = False
             ui.label("Voice drafts stay editable. Get Answer Tips gives coaching before you submit.").classes("interview-meta")
         ui.label(
             "SHORTCUTS · Ctrl/Cmd+Enter submit · Alt+M start/stop voice"

@@ -74,7 +74,20 @@ return await (async () => {
         const meter = document.querySelector('.interview-audio-level');
         if (meter) meter.style.width = '0%';
     };
+    controller.stopReplay = () => {
+        if (controller.replayAudio) {
+            try { controller.replayAudio.pause(); } catch (_) {}
+            controller.replayAudio.onended = null;
+            controller.replayAudio.onerror = null;
+            controller.replayAudio = null;
+        }
+        if (controller.replayUrl) {
+            try { URL.revokeObjectURL(controller.replayUrl); } catch (_) {}
+            controller.replayUrl = null;
+        }
+    };
     controller.dispose = (discardAudio=true) => {
+        controller.stopReplay();
         controller.recording = false;
         clearInterval(controller.timer);
         controller.stopRecognition();
@@ -279,8 +292,10 @@ return await (async context => {
         }
         controller.status('Transcription ready · review before submitting');
         controller.caption('');
+        controller.stopReplay();
         controller.chunks = [];
-        controller.lastBlob = null;
+        // Keep lastBlob in browser memory for the rest of this answer turn so the
+        // user can replay what they said. cancel_recording()/dispose() frees it.
         return {ok:true, ...data};
     } catch (error) {
         return {
@@ -316,6 +331,33 @@ async def cancel_recording() -> None:
         }
         return true;
     """, timeout=10.0)
+
+
+async def replay_recording() -> dict:
+    """Toggle playback of the in-memory recording for the current answer turn."""
+    return await ui.run_javascript(r"""
+        const controller = window.mqInterviewRecorder;
+        if (!controller?.lastBlob?.size) {
+            return {ok:false, error:'No recording is available to replay.'};
+        }
+        if (controller.replayAudio) {
+            controller.stopReplay();
+            return {ok:true, playing:false};
+        }
+        const url = URL.createObjectURL(controller.lastBlob);
+        const audio = new Audio(url);
+        controller.replayAudio = audio;
+        controller.replayUrl = url;
+        audio.onended = () => controller.stopReplay();
+        audio.onerror = () => controller.stopReplay();
+        try {
+            await audio.play();
+        } catch (error) {
+            controller.stopReplay();
+            return {ok:false, error:'Could not play the recording: ' + (error?.message || error)};
+        }
+        return {ok:true, playing:true};
+    """, timeout=15.0)
 
 
 async def download_recording() -> bool:
