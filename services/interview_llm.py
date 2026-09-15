@@ -18,23 +18,22 @@ FAILURE_TAGS = {
 }
 
 INTERVIEW_MODELS_OPENROUTER = [
-    "deepseek/deepseek-v4-flash-0731",
+    "deepseek/deepseek-v4.1-flash",
     "openai/gpt-5.6-luna",
     "deepseek/deepseek-v4-pro-0813",
-    "tencent/hy3",
+    "tencent/hy4-preview",
     "xiaomi/mimo-v2.5",
     "moonshotai/kimi-k3",
 ]
 
 INTERVIEW_MODELS_OPENCODE_GO = [
-    "deepseek-v4-flash",
+    "deepseek-v4.1-flash",
     "deepseek-v4-pro",
-    "kimi-k2.6",
     "kimi-k3",
     "glm-5.1",
     "glm-5.2",
     "glm-5.3",
-    "hy3",
+    "hy4-preview",
     "mimo-v2.5",
 ]
 

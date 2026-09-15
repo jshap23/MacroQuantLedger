@@ -48,8 +48,8 @@ def main() -> int:
         assert us.llm_model() == "deepseek-v4-pro", "OpenCode Go model should persist"
 
         # Env override for model
-        os.environ["OPENCODE_MODEL"] = "kimi-k2.6"
-        assert us.llm_model() == "kimi-k2.6", "OPENCODE_MODEL env var should override"
+        os.environ["OPENCODE_MODEL"] = "kimi-k3"
+        assert us.llm_model() == "kimi-k3", "OPENCODE_MODEL env var should override"
 
         # Env override for API key
         os.environ["OPENCODE_API_KEY"] = "env-key"

@@ -3,7 +3,7 @@
 # OpenRouter — OpenAI-compatible Chat Completions (https://openrouter.ai/docs)
 OPENROUTER_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
 # Default model slug on OpenRouter; override with OPENROUTER_MODEL or per-task env vars
-OPENROUTER_MODEL_DEFAULT = "moonshotai/kimi-k2.6"
+OPENROUTER_MODEL_DEFAULT = "deepseek/deepseek-v4.1-flash"
 
 # Practice TTS uses OpenRouter's /audio/speech endpoint independently of the
 # interview chat provider and model.
@@ -17,7 +17,7 @@ INTERVIEW_TTS_MODELS = (
 # OpenCode Go — OpenAI-compatible subscription endpoint (https://opencode.ai/docs/go)
 OPENCODE_GO_BASE_URL_DEFAULT = "https://opencode.ai/zen/go/v1"
 # Default model ID on OpenCode Go; override with OPENCODE_MODEL or per-task env vars
-OPENCODE_GO_MODEL_DEFAULT = "deepseek-v4-flash"
+OPENCODE_GO_MODEL_DEFAULT = "deepseek-v4.1-flash"
 
 # Provider selection constants
 LLM_PROVIDER_OPENROUTER = "openrouter"
