@@ -566,15 +566,15 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
         return
     with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
         ui.label("PRACTICE FROM · MY VIEWS").classes("interview-kicker")
-        ui.label("Select one View or several for a mixed session. Stored structure is passed automatically.").classes("interview-meta").style("margin:.3rem 0 .7rem")
+        ui.label("Select one View to practice. Stored structure is passed automatically.").classes("interview-meta").style("margin:.3rem 0 .7rem")
         options = {view.id: view.name for view in active}
-        selected = ui.select(options, label="My Views", multiple=True).props("use-chips").classes("w-full dark-input")
+        selected = ui.select(options, label="My View").classes("w-full dark-input")
         style = ui.toggle(["Deliver", "Discuss", "Defend"], value="Deliver").props("no-caps")
-        def configure(ids=None):
-            chosen = list(ids or selected.value or [])
+        def configure():
+            chosen = selected.value
             if not chosen:
-                ui.notify("Select at least one View.", type="warning"); return
-            state["view_setup"] = {"ids": chosen, "style": style.value or "Deliver"}; refresh()
+                ui.notify("Select a View.", type="warning"); return
+            state["view_setup"] = {"ids": [chosen], "style": style.value or "Deliver"}; refresh()
         with ui.row().style("gap:.5rem;flex-wrap:wrap;margin-top:.65rem"):
             ui.button("Begin", icon="play_arrow", on_click=lambda: configure()).classes("submit-btn")
 
@@ -587,6 +587,21 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
     style = setup.get("style", "Deliver")
     preset_key = f"view_{style.lower()}"
     preset = get_preset(preset_key)
+    active_views = [view for view in (app_state.topic_views if app_state else []) if not view.archived]
+
+    def reshuffle() -> None:
+        """Re-roll the surprise pick so a different View/topic is offered."""
+        current = {view.id for view in views}
+        pool = [view for view in active_views if view.id not in current] or active_views
+        if not pool:
+            return
+        state["view_setup"] = {
+            "ids": [random.choice(pool).id],
+            "style": style,
+            "surprise": True,
+        }
+        refresh()
+
     with ui.element("div").classes("interview-card").style("border-color:var(--accent)"):
         ui.label(
             "SURPRISE PICK · MY VIEWS" if setup.get("surprise") else f"{style.upper()} · MY VIEWS"
@@ -626,6 +641,8 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
             state.update(session=session, pending=None, retrying=False, view_setup=None); refresh()
         with ui.row().style("gap:.55rem;margin-top:.75rem"):
             button = ui.button("Begin", icon="play_arrow", on_click=start).classes("submit-btn")
+            if setup.get("surprise") and len(active_views) > 1:
+                ui.button("Shuffle", icon="shuffle", on_click=reshuffle).classes("cancel-btn")
             ui.button("Cancel", on_click=lambda: (state.update(view_setup=None), refresh())).classes("cancel-btn")
 
 
