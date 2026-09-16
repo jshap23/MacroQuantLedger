@@ -20,9 +20,10 @@ from components.interview_speech import (
     cancel_recording, replay_recording, start_recording, stop_recording,
 )
 from components.interview_tts import speak_question, stop_speaking
+from components.status_bar import days_since, staleness_color, staleness_label
 from storage.interview_store import (
     load_database, model_practice_stats, performance_summary,
-    preferred_model, save_preferred_model,
+    preferred_model, save_preferred_model, view_practice_stats,
 )
 from storage.model_library import (
     ModelNote, find_comparison_note, model_context_for, models_folder_path,
@@ -194,6 +195,24 @@ def _inject_css() -> None:
             padding:0.65rem 0.8rem; margin-bottom:0.5rem; background:var(--bg-input);
         }
         .interview-model-tags { color:var(--text-muted); font-size:0.68rem; }
+        .interview-view-stats { margin-top:0.55rem; }
+        .interview-view-history { display:flex; align-items:baseline; gap:0.3rem; }
+        .interview-stats-row {
+            display:flex; align-items:center; gap:0.45rem; flex-wrap:wrap; margin-top:0.5rem;
+        }
+        .interview-pip-row { display:flex; align-items:center; gap:5px; }
+        .interview-pip {
+            width:8px; height:8px; border-radius:50%; cursor:default;
+            background:transparent; border:1px solid var(--border-strong);
+        }
+        .interview-pip-on {
+            background:#4ade80; border-color:#4ade80; box-shadow:0 0 4px #4ade8040;
+        }
+        .interview-chip {
+            display:inline-flex; align-items:center; gap:0.3rem; border-radius:4px;
+            padding:2px 8px; line-height:1.5; font-family:'IBM Plex Mono',monospace;
+            font-size:0.68rem;
+        }
         @media (max-width:640px) {
             .interview-card { padding:0.9rem; }
             .interview-question { padding:1rem 0 1.2rem; }
@@ -585,15 +604,118 @@ def _render_model_library(state: dict, refresh) -> None:
         rebuild()
 
 
+def _fmt_stat(value: float) -> str:
+    return f"{value:g}"
+
+
+def _session_count(count: int) -> str:
+    return f"{count} session{'s' if count != 1 else ''}"
+
+
+def _chip_style(color: str) -> str:
+    """Badge convention ({color}15 bg / {color}33 border). CSS custom properties
+    cannot take a hex alpha suffix, so token colors resolve through color-mix."""
+    if color.startswith("var("):
+        return (
+            f"color:{color};background:color-mix(in srgb, {color} 8%, transparent);"
+            f"border:1px solid color-mix(in srgb, {color} 20%, transparent);"
+        )
+    return f"color:{color};background:{color}15;border:1px solid {color}33;"
+
+
+def _view_stat_chip(icon: str | None, text: str, color: str, tooltip: str = "") -> None:
+    chip = ui.element("span").classes("interview-chip").style(_chip_style(color))
+    with chip:
+        if icon:
+            ui.icon(icon).style(f"font-size:0.82rem;color:{color};")
+        ui.label(text)
+    if tooltip:
+        chip.tooltip(tooltip)
+
+
+def _render_view_coverage(practice) -> None:
+    with ui.row().classes("interview-pip-row"):
+        for label, count in (
+            ("Deliver", practice.delivery_attempts),
+            ("Discuss", practice.discussion_attempts),
+            ("Defend", practice.defense_attempts),
+        ):
+            dot = ui.element("span").classes(
+                "interview-pip interview-pip-on" if count > 0 else "interview-pip"
+            )
+            dot.tooltip(f"{label} — {count} sessions")
+
+
+def _render_view_score_chips(entry: dict) -> None:
+    latest = entry.get("latest")
+    if not latest:
+        return
+    _view_stat_chip(None, f"last {_fmt_stat(latest['score'])}", "var(--accent)")
+    if entry.get("previous") is None:
+        return  # no prior scored run yet, so there is no baseline to beat
+    best = entry.get("best")
+    if best and latest.get("score") == best.get("score"):
+        _view_stat_chip("emoji_events", "Personal best", "var(--accent)")
+        return
+    delta = entry.get("delta_vs_prev")
+    if delta is not None:
+        if delta > 0:
+            _view_stat_chip("trending_up", f"+{_fmt_stat(delta)} vs last run", "#4ade80")
+        elif delta < 0:
+            _view_stat_chip("trending_down", f"{_fmt_stat(delta)} vs last run", "#f87171")
+        else:
+            _view_stat_chip("trending_flat", "no change vs last run", "var(--text-muted)")
+    if best:
+        gap = entry.get("delta_vs_best")
+        _view_stat_chip(
+            "emoji_events", f"best {_fmt_stat(best['score'])} (6mo)", "#fbbf24",
+            f"{_fmt_stat(abs(gap))} below best" if gap else "",
+        )
+
+
+def _render_view_practice_stats(view, entry: dict) -> None:
+    practice = view.practice
+    latest = entry.get("latest")
+    if practice.practice_count <= 0:
+        ui.label("Not practiced yet").classes("interview-meta")
+    elif latest is None:
+        ui.label(f"{_session_count(practice.practice_count)} · no score yet").classes("interview-meta")
+    else:
+        days = days_since(practice.last_practiced)
+        with ui.row().classes("interview-view-history"):
+            ui.label("last practiced").classes("interview-meta")
+            ui.label(staleness_label(days)).style(
+                f"color:{staleness_color(days)};font-size:0.72rem;font-weight:700;"
+            )
+            ui.label(f"· {_session_count(practice.practice_count)}").classes("interview-meta")
+    with ui.row().classes("interview-stats-row"):
+        _render_view_coverage(practice)
+        _render_view_score_chips(entry)
+
+
 def _render_views_quick_start(state: dict, refresh, app_state) -> None:
+    if app_state is None:
+        return
     active = [view for view in app_state.topic_views if not view.archived]
     if not active:
         return
+    stats_by_view = view_practice_stats()
     with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
         ui.label("PRACTICE FROM · MY VIEWS").classes("interview-kicker")
         ui.label("Select one View to practice. Stored structure is passed automatically.").classes("interview-meta").style("margin:.3rem 0 .7rem")
         options = {view.id: view.name for view in active}
-        selected = ui.select(options, label="My View").classes("w-full dark-input")
+        selected = ui.select(options, label="My View", on_change=lambda _: render_stats()).classes("w-full dark-input")
+        stats_slot = ui.element("div").classes("interview-view-stats")
+
+        def render_stats() -> None:
+            stats_slot.clear()
+            view = next((item for item in active if item.id == selected.value), None)
+            if view is None:
+                return
+            with stats_slot:
+                _render_view_practice_stats(view, stats_by_view.get(view.id) or {})
+
+        render_stats()
         style = ui.toggle(["Deliver", "Discuss", "Defend"], value="Deliver").props("no-caps")
         def configure():
             chosen = selected.value

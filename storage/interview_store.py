@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter, defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 
@@ -204,3 +204,55 @@ def model_practice_stats() -> dict[str, dict]:
         }
         for note_id, note in notes.items()
     }
+
+
+def view_practice_stats(window_days: int = 182) -> dict[str, dict]:
+    """Per-View scored-practice history derived from completed View sessions."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    views: dict[str, list[tuple[datetime, date, float | None]]] = {}
+    for session in load_database().sessions:
+        if session.status != "completed" or not session.view_ids or session.completed_at is None:
+            continue
+        completed = session.completed_at
+        if completed.tzinfo is None:
+            completed = completed.replace(tzinfo=timezone.utc)
+        scores = [
+            answer.score
+            for question in session.questions
+            for answer in question.answers
+            if answer.score is not None and not answer.is_retry
+        ]
+        run_score = round(sum(scores) / len(scores), 1) if scores else None
+        for view_id in session.view_ids:
+            views.setdefault(view_id, []).append((completed, completed.date(), run_score))
+
+    stats: dict[str, dict] = {}
+    for view_id, runs in views.items():
+        scored_all = sorted(
+            (run for run in runs if run[2] is not None),
+            key=lambda run: run[0],
+        )
+        latest = scored_all[-1] if scored_all else None
+        previous = scored_all[-2] if len(scored_all) >= 2 else None
+        window_runs = [run for run in runs if run[0] >= cutoff]
+        window_scored = [run for run in window_runs if run[2] is not None]
+        best = max(window_scored, key=lambda run: run[2]) if window_scored else None
+        latest_score = latest[2] if latest else None
+        best_score = best[2] if best else None
+        previous_score = previous[2] if previous else None
+        stats[view_id] = {
+            "latest": {"score": latest_score, "date": latest[1]} if latest else None,
+            "previous": {"score": previous_score, "date": previous[1]} if previous else None,
+            "best": {"score": best_score, "date": best[1]} if best else None,
+            "runs_6mo": len(window_runs),
+            "scored_runs": len(window_scored),
+            "delta_vs_best": (
+                round(latest_score - best_score, 1)
+                if latest_score is not None and best_score is not None else None
+            ),
+            "delta_vs_prev": (
+                round(latest_score - previous_score, 1)
+                if latest_score is not None and previous_score is not None else None
+            ),
+        }
+    return stats
