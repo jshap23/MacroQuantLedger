@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import RLock
 
 from models.interview import InterviewDatabase, InterviewSession
+from models.schema import TopicView
 
 
 INTERVIEW_FILE = Path(__file__).resolve().parent.parent / "data" / "interview_history.json"
@@ -254,5 +255,58 @@ def view_practice_stats(window_days: int = 182) -> dict[str, dict]:
                 round(latest_score - previous_score, 1)
                 if latest_score is not None and previous_score is not None else None
             ),
+            # Most recent scored runs only, oldest first, for trend display.
+            "series": [
+                {"score": run[2], "date": run[1]} for run in scored_all[-12:]
+            ],
         }
     return stats
+
+
+VIEW_CADENCE_DAYS: dict[str, int] = {"Core": 7, "Normal": 21, "Low Priority": 45}
+
+_PRIORITY_RANK = {"Core": 0, "Normal": 1, "Low Priority": 2}
+
+
+def view_refresh_target(priority: str) -> int:
+    """Days between refreshes for a View of this priority; unknown values fall back to Normal."""
+    return VIEW_CADENCE_DAYS.get(priority, VIEW_CADENCE_DAYS["Normal"])
+
+
+def view_practice_queue(
+    views: list[TopicView], *, ghost_limit: int = 3, row_limit: int = 8
+) -> list[dict]:
+    """Rank non-archived TopicViews for the practice board."""
+    now = datetime.now(timezone.utc)
+    entries: list[dict] = []
+    for view in views:
+        target = view_refresh_target(view.priority)
+        last = view.practice.last_practiced
+        if last is None:
+            entries.append({
+                "view": view, "section": "next", "ghost": True,
+                "days": None, "target": target, "ratio": None, "overdue": True,
+            })
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        days = (now - last).days
+        overdue = days > target
+        entries.append({
+            "view": view, "section": "next" if overdue else "warm", "ghost": False,
+            "days": days, "target": target,
+            "ratio": round(days / target, 2), "overdue": overdue,
+        })
+
+    original_order = {id(view): index for index, view in enumerate(views)}
+    ghosts = [entry for entry in entries if entry["ghost"]]
+    ghosts.sort(key=lambda entry: (
+        _PRIORITY_RANK.get(entry["view"].priority, 1),
+        original_order[id(entry["view"])],
+    ))
+    overdue = [entry for entry in entries if not entry["ghost"] and entry["overdue"]]
+    overdue.sort(key=lambda entry: entry["ratio"], reverse=True)
+    warm = [entry for entry in entries if not entry["ghost"] and not entry["overdue"]]
+    warm.sort(key=lambda entry: entry["days"])
+
+    return (ghosts[:ghost_limit] + overdue + warm)[:row_limit]

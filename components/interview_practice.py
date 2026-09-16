@@ -23,7 +23,8 @@ from components.interview_tts import speak_question, stop_speaking
 from components.status_bar import days_since, staleness_color, staleness_label
 from storage.interview_store import (
     load_database, model_practice_stats, performance_summary,
-    preferred_model, save_preferred_model, view_practice_stats,
+    preferred_model, save_preferred_model, view_practice_queue,
+    view_practice_stats, view_refresh_target,
 )
 from storage.model_library import (
     ModelNote, find_comparison_note, model_context_for, models_folder_path,
@@ -35,7 +36,7 @@ from storage.user_settings import (
 )
 import config as app_config
 from services.topic_views import views_context
-from storage.persistence import load_state
+from storage.persistence import load_state, save_state
 
 
 MODE_HELP = {
@@ -195,27 +196,86 @@ def _inject_css() -> None:
             padding:0.65rem 0.8rem; margin-bottom:0.5rem; background:var(--bg-input);
         }
         .interview-model-tags { color:var(--text-muted); font-size:0.68rem; }
-        .interview-view-stats { margin-top:0.55rem; }
-        .interview-view-history { display:flex; align-items:baseline; gap:0.3rem; }
-        .interview-stats-row {
-            display:flex; align-items:center; gap:0.45rem; flex-wrap:wrap; margin-top:0.5rem;
+        .section {
+            font-family:var(--font-data); font-size:0.58rem; font-weight:700;
+            letter-spacing:0.16em; color:var(--text-faint); margin:1rem 0 0.35rem;
+            padding-top:0.6rem; border-top:1px solid var(--border);
         }
-        .interview-pip-row { display:flex; align-items:center; gap:5px; }
-        .interview-pip {
-            width:8px; height:8px; border-radius:50%; cursor:default;
-            background:transparent; border:1px solid var(--border-strong);
+        .section:first-of-type { border-top:none; padding-top:0; margin-top:1.1rem; }
+        .section span { color:var(--text-faint); font-weight:400; letter-spacing:0; }
+        .vrow {
+            display:grid;
+            grid-template-columns:3px minmax(130px,1fr) 74px 44px 62px 40px 46px 60px;
+            align-items:center; gap:10px; padding:5px 7px 5px 0; border-radius:5px; position:relative;
         }
-        .interview-pip-on {
-            background:#4ade80; border-color:#4ade80; box-shadow:0 0 4px #4ade8040;
+        .vrow:hover { background:var(--bg-hover); }
+        .vrow + .vrow { border-top:1px solid var(--bg-hover); }
+        .edge { width:3px; height:18px; border-radius:2px; background:var(--border-strong); }
+        .vname {
+            font-size:0.82rem; font-weight:600; color:var(--text-primary);
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
         }
-        .interview-chip {
-            display:inline-flex; align-items:center; gap:0.3rem; border-radius:4px;
-            padding:2px 8px; line-height:1.5; font-family:'IBM Plex Mono',monospace;
-            font-size:0.68rem;
+        .ghost .vname { color:var(--text-muted); font-weight:500; }
+        .score {
+            font-family:var(--font-data); font-size:0.86rem; font-weight:700;
+            text-align:right; color:var(--text-primary); font-variant-numeric:tabular-nums;
         }
+        .score.dim { color:var(--text-faint); font-weight:400; }
+        .score.pb { color:var(--accent); }
+        .score .star { font-size:0.58rem; vertical-align:top; margin-left:1px; }
+        .delta {
+            font-family:var(--font-data); font-size:0.6rem; font-weight:700;
+            white-space:nowrap;
+        }
+        .age {
+            font-family:var(--font-data); font-size:0.64rem; font-weight:700; text-align:right;
+            white-space:nowrap; cursor:default;
+        }
+        .pips { display:flex; gap:3px; align-items:center; }
+        .pips i { width:6px; height:6px; border-radius:50%; background:transparent;
+            border:1px solid #3d3d52; }
+        .pips i.on { background:var(--accent); border-color:var(--accent); }
+        .meter { display:flex; gap:2px; align-items:flex-end; height:16px; }
+        .meter i { width:4px; height:9px; border-radius:1px; background:var(--border-strong); }
+        .meter i.f { background:var(--accent); height:16px; }
+        .ghostline { display:block; height:1px; border-top:1px dashed #3d3d52;
+            width:58px; align-self:center; }
+        .actions { display:flex; gap:4px; align-items:center; justify-content:flex-end; position:relative; }
+        .kebab,.go {
+            width:24px; height:24px; border-radius:5px; border:1px solid var(--border-strong);
+            background:transparent; color:var(--text-muted); font-size:0.68rem; line-height:1;
+            display:flex; align-items:center; justify-content:center; cursor:pointer;
+            transition:all .12s; padding:0;
+        }
+        .kebab { opacity:0.4; font-size:0.62rem; letter-spacing:-0.05em; }
+        .vrow:hover .kebab { opacity:1; }
+        .vrow:hover .go { border-color:var(--accent); color:var(--accent); background:var(--accent-glow); }
+        .kebab:hover,.kebab.active { border-color:var(--accent); color:var(--accent); opacity:1; }
+        .pmenu {
+            background:var(--bg-card); border:1px solid var(--border-strong); border-radius:6px;
+            padding:4px; min-width:190px; z-index:9; box-shadow:0 8px 24px #000a;
+        }
+        .phead { font-family:var(--font-data); font-size:0.55rem; letter-spacing:0.14em;
+            color:var(--text-faint); padding:3px 8px 5px; }
+        .pitem { display:flex; justify-content:space-between; align-items:baseline; gap:1rem;
+            padding:4px 8px; border-radius:4px; font-size:0.72rem; color:var(--text-primary);
+            cursor:pointer; }
+        .pitem:hover { background:var(--bg-hover); }
+        .pitem.active { color:var(--accent); }
+        .pitem.active::before { content:'\\2713'; margin-right:0.4rem; font-size:0.62rem; }
+        .pitem span { color:var(--text-faint); font-family:var(--font-data); font-size:0.58rem; }
+        .expand { display:flex; align-items:center; gap:0.45rem; margin-top:0.9rem;
+            padding-top:0.8rem; border-top:1px solid var(--border); cursor:pointer;
+            font-family:var(--font-data); font-size:0.68rem; color:var(--text-muted); }
+        .expand:hover { color:var(--accent); }
         @media (max-width:640px) {
             .interview-card { padding:0.9rem; }
             .interview-question { padding:1rem 0 1.2rem; }
+            .vrow { grid-template-columns:3px 1fr 44px 46px 60px; grid-template-areas:
+                "edge name score age actions" ". trend delta pips ."; row-gap:3px; }
+            .edge{grid-area:edge} .vname{grid-area:name} .score{grid-area:score}
+            .age{grid-area:age} .actions{grid-area:actions} .meter{grid-area:trend}
+            .delta{grid-area:delta} .pips{grid-area:pips}
         }
     </style>''')
 
@@ -605,92 +665,54 @@ def _render_model_library(state: dict, refresh) -> None:
 
 
 def _fmt_stat(value: float) -> str:
-    return f"{value:g}"
+    return f"{value:.1f}"
 
 
 def _session_count(count: int) -> str:
     return f"{count} session{'s' if count != 1 else ''}"
 
 
-def _chip_style(color: str) -> str:
-    """Badge convention ({color}15 bg / {color}33 border). CSS custom properties
-    cannot take a hex alpha suffix, so token colors resolve through color-mix."""
-    if color.startswith("var("):
-        return (
-            f"color:{color};background:color-mix(in srgb, {color} 8%, transparent);"
-            f"border:1px solid color-mix(in srgb, {color} 20%, transparent);"
-        )
-    return f"color:{color};background:{color}15;border:1px solid {color}33;"
-
-
-def _view_stat_chip(icon: str | None, text: str, color: str, tooltip: str = "") -> None:
-    chip = ui.element("span").classes("interview-chip").style(_chip_style(color))
-    with chip:
-        if icon:
-            ui.icon(icon).style(f"font-size:0.82rem;color:{color};")
-        ui.label(text)
-    if tooltip:
-        chip.tooltip(tooltip)
+_REFRESH_TARGETS = (
+    ("Core", "weekly"),
+    ("Normal", "3 weeks"),
+    ("Low Priority", "6 weeks"),
+)
+_TARGET_WORDS = {7: "weekly", 21: "3-week", 45: "6-week"}
 
 
 def _render_view_coverage(practice) -> None:
-    with ui.row().classes("interview-pip-row"):
+    with ui.element("span").classes("pips"):
         for label, count in (
             ("Deliver", practice.delivery_attempts),
             ("Discuss", practice.discussion_attempts),
             ("Defend", practice.defense_attempts),
         ):
-            dot = ui.element("span").classes(
-                "interview-pip interview-pip-on" if count > 0 else "interview-pip"
-            )
+            dot = ui.element("i")
+            if count > 0:
+                dot.classes("on")
             dot.tooltip(f"{label} — {count} sessions")
 
 
-def _render_view_score_chips(entry: dict) -> None:
-    latest = entry.get("latest")
-    if not latest:
-        return
-    _view_stat_chip(None, f"last {_fmt_stat(latest['score'])}", "var(--accent)")
-    if entry.get("previous") is None:
-        return  # no prior scored run yet, so there is no baseline to beat
-    best = entry.get("best")
-    if best and latest.get("score") == best.get("score"):
-        _view_stat_chip("emoji_events", "Personal best", "var(--accent)")
-        return
-    delta = entry.get("delta_vs_prev")
-    if delta is not None:
-        if delta > 0:
-            _view_stat_chip("trending_up", f"+{_fmt_stat(delta)} vs last run", "#4ade80")
-        elif delta < 0:
-            _view_stat_chip("trending_down", f"{_fmt_stat(delta)} vs last run", "#f87171")
-        else:
-            _view_stat_chip("trending_flat", "no change vs last run", "var(--text-muted)")
-    if best:
-        gap = entry.get("delta_vs_best")
-        _view_stat_chip(
-            "emoji_events", f"best {_fmt_stat(best['score'])} (6mo)", "#fbbf24",
-            f"{_fmt_stat(abs(gap))} below best" if gap else "",
-        )
-
-
-def _render_view_practice_stats(view, entry: dict) -> None:
-    practice = view.practice
-    latest = entry.get("latest")
-    if practice.practice_count <= 0:
-        ui.label("Not practiced yet").classes("interview-meta")
-    elif latest is None:
-        ui.label(f"{_session_count(practice.practice_count)} · no score yet").classes("interview-meta")
-    else:
-        days = days_since(practice.last_practiced)
-        with ui.row().classes("interview-view-history"):
-            ui.label("last practiced").classes("interview-meta")
-            ui.label(staleness_label(days)).style(
-                f"color:{staleness_color(days)};font-size:0.72rem;font-weight:700;"
-            )
-            ui.label(f"· {_session_count(practice.practice_count)}").classes("interview-meta")
-    with ui.row().classes("interview-stats-row"):
-        _render_view_coverage(practice)
-        _render_view_score_chips(entry)
+def _sparkline_svg(series: list[dict]) -> str:
+    """Inline 70x22 trend line for a View with 3+ scored runs."""
+    n = len(series)
+    points = [
+        (2 + index * (66 / (n - 1)), 3 + (10 - item["score"]) / 9 * 16)
+        for index, item in enumerate(series)
+    ]
+    best_y = 3 + (10 - max(item["score"] for item in series)) / 9 * 16
+    coords = " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+    last_x, last_y = points[-1]
+    return (
+        '<svg width="70" height="22" viewBox="0 0 70 22" fill="none" '
+        'xmlns="http://www.w3.org/2000/svg">'
+        f'<line x1="2" y1="{best_y:.2f}" x2="68" y2="{best_y:.2f}" '
+        'stroke="#fbbf24" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>'
+        f'<polyline points="{coords}" stroke="#2dd4bf" stroke-width="1.6" '
+        'stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
+        f'<circle cx="{last_x:.2f}" cy="{last_y:.2f}" r="2.4" fill="#2dd4bf"/>'
+        "</svg>"
+    )
 
 
 def _render_views_quick_start(state: dict, refresh, app_state) -> None:
@@ -700,30 +722,164 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
     if not active:
         return
     stats_by_view = view_practice_stats()
+    queue = view_practice_queue(active)
+
+    def trend_html(entry: dict) -> str:
+        series = (stats_by_view.get(entry["view"].id) or {}).get("series") or []
+        if not series:
+            return '<span class="ghostline"></span>'
+        if len(series) < 3:
+            filled = max(0, min(10, round(series[-1]["score"])))
+            bars = "".join('<i class="f"></i>' if index < filled else "<i></i>" for index in range(10))
+            return f'<span class="meter">{bars}</span>'
+        return _sparkline_svg(series)
+
+    def board_entry(view) -> dict:
+        target = view_refresh_target(view.priority)
+        days = days_since(view.practice.last_practiced)
+        if days is None:
+            return {"view": view, "ghost": True, "days": None, "target": target, "ratio": None}
+        return {
+            "view": view, "ghost": False, "days": days, "target": target,
+            "ratio": round(days / target, 2) if target else None,
+        }
+
+    def set_priority(view, value: str) -> None:
+        if app_state is None or view.priority == value:
+            return
+        view.priority = value
+        save_state(app_state)
+        refresh()
+
+    def start_view(view) -> None:
+        state["view_setup"] = {"ids": [view.id], "style": style.value or "Deliver"}
+        refresh()
+
+    def render_row(entry: dict) -> None:
+        view = entry["view"]
+        stats = stats_by_view.get(view.id) or {}
+        latest = stats.get("latest")
+        ghost = entry["ghost"]
+        days = entry["days"]
+        target = entry.get("target") or view_refresh_target(view.priority)
+        target_word = _TARGET_WORDS.get(target, f"{target}-day")
+
+        row = ui.element("div").classes("vrow ghost" if ghost else "vrow")
+        with row:
+            edge = ui.element("span").classes("edge")
+            if not ghost:
+                edge.style(f"background:{staleness_color(days)}")
+
+            ui.label(view.name).classes("vname")
+            ui.html(trend_html(entry), tag="span").classes("trend")
+
+            if ghost or latest is None:
+                ui.html("—", tag="span").classes("score dim")
+            else:
+                best = stats.get("best")
+                is_pb = (
+                    stats.get("previous") is not None
+                    and best is not None
+                    and latest["score"] == best["score"]
+                )
+                if is_pb:
+                    score = ui.html(
+                        f'{_fmt_stat(latest["score"])}<span class="star">★</span>', tag="span"
+                    )
+                    score.classes("score pb")
+                else:
+                    score = ui.html(_fmt_stat(latest["score"]), tag="span").classes("score")
+                if best is not None and latest["score"] != best["score"]:
+                    score.tooltip(
+                        f'best {_fmt_stat(best["score"])} · {_fmt_stat(abs(stats["delta_vs_best"]))} below'
+                    )
+
+            delta = stats.get("delta_vs_prev")
+            if delta and delta > 0:
+                ui.label(f"▲+{_fmt_stat(delta)}").classes("delta").style("color:#4ade80")
+            elif delta and delta < 0:
+                ui.label(f"▼{_fmt_stat(abs(delta))}").classes("delta").style("color:#f87171")
+            else:
+                ui.element("span").classes("delta")
+
+            _render_view_coverage(view.practice)
+
+            if ghost or days is None:
+                age = ui.label("never").classes("age").style("color:var(--text-faint)")
+                age.tooltip(f"never practiced · {view.priority} → {target_word} target")
+            else:
+                age = ui.label(staleness_label(days)).classes("age").style(
+                    f"color:{staleness_color(days)}"
+                )
+                tooltip = (
+                    f"{staleness_label(days)} · {_session_count(view.practice.practice_count)} · "
+                    f"{view.priority} → {target_word} target"
+                )
+                ratio = entry.get("ratio")
+                if ratio is not None and ratio > 1:
+                    tooltip += f" · {ratio:.1f}× over"
+                age.tooltip(tooltip)
+
+            with ui.element("span").classes("actions"):
+                kebab = ui.element("button").classes("kebab")
+                with kebab:
+                    ui.html("⋯", tag="span")
+                    with ui.menu().classes("pmenu") as menu:
+                        ui.label("REFRESH TARGET").classes("phead")
+                        for priority, word in _REFRESH_TARGETS:
+                            is_active = (view.priority or "Normal") == priority
+                            item = ui.element("div").classes(
+                                "pitem active" if is_active else "pitem"
+                            )
+                            item.on(
+                                "click",
+                                lambda _, v=view, p=priority: (menu.close(), set_priority(v, p)),
+                            )
+                            with item:
+                                ui.label(priority)
+                                ui.html(f"<span>{word}</span>")
+                kebab.on("click", menu.toggle)
+
+                go = ui.element("button").classes("go")
+                with go:
+                    ui.html("▶", tag="span")
+                go.on("click", lambda v=view: start_view(v))
+
     with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
-        ui.label("PRACTICE FROM · MY VIEWS").classes("interview-kicker")
-        ui.label("Select one View to practice. Stored structure is passed automatically.").classes("interview-meta").style("margin:.3rem 0 .7rem")
-        options = {view.id: view.name for view in active}
-        selected = ui.select(options, label="My View", on_change=lambda _: render_stats()).classes("w-full dark-input")
-        stats_slot = ui.element("div").classes("interview-view-stats")
+        with ui.row().style(
+            "width:100%; align-items:flex-start; justify-content:space-between; "
+            "gap:0.5rem; flex-wrap:wrap; margin-bottom:0.15rem;"
+        ):
+            with ui.column().style("gap:0.1rem;"):
+                ui.label("PRACTICE FROM · MY VIEWS").classes("interview-kicker")
+                ui.label("Pick a View, or hit Surprise Me.").classes("interview-meta")
+            style = ui.toggle(["Deliver", "Discuss", "Defend"], value="Deliver").props("no-caps")
 
-        def render_stats() -> None:
-            stats_slot.clear()
-            view = next((item for item in active if item.id == selected.value), None)
-            if view is None:
-                return
-            with stats_slot:
-                _render_view_practice_stats(view, stats_by_view.get(view.id) or {})
+        next_entries = [entry for entry in queue if entry["section"] == "next"]
+        warm_entries = [entry for entry in queue if entry["section"] == "warm"]
 
-        render_stats()
-        style = ui.toggle(["Deliver", "Discuss", "Defend"], value="Deliver").props("no-caps")
-        def configure():
-            chosen = selected.value
-            if not chosen:
-                ui.notify("Select a View.", type="warning"); return
-            state["view_setup"] = {"ids": [chosen], "style": style.value or "Deliver"}; refresh()
-        with ui.row().style("gap:.5rem;flex-wrap:wrap;margin-top:.65rem"):
-            ui.button("Begin", icon="play_arrow", on_click=lambda: configure()).classes("submit-btn")
+        if next_entries:
+            ui.html(
+                "PICK UP NEXT <span>· unpracticed first, then most overdue relative to target</span>"
+            ).classes("section")
+            for entry in next_entries:
+                render_row(entry)
+        if warm_entries:
+            ui.html("KEEPING WARM <span>· practiced recently</span>").classes("section")
+            for entry in warm_entries:
+                render_row(entry)
+
+        shown_ids = {entry["view"].id for entry in queue}
+        remaining = [view for view in active if view.id not in shown_ids]
+        if remaining:
+            practiced = sum(1 for view in active if view.practice.last_practiced is not None)
+            never = len(active) - practiced
+            with ui.element("div").classes("expand"):
+                with ui.expansion(
+                    f"Show all {len(active)} Views ({practiced} practiced · {never} never)"
+                ).classes("w-full"):
+                    for view in remaining:
+                        render_row(board_entry(view))
 
 
 def _render_view_setup(state: dict, refresh, app_state) -> None:
