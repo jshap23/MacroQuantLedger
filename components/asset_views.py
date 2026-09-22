@@ -20,14 +20,7 @@ SCORE_COLORS = {
     "—": {"bg": "#1e1e24", "text": "#44445a", "dot": "#44445a"},
 }
 
-_CSS_INJECTED = False
-
-
 def _inject_css():
-    global _CSS_INJECTED
-    if _CSS_INJECTED:
-        return
-    _CSS_INJECTED = True
     ui.add_head_html('''<style id="mq-asset-views-css">
         .asset-note-label {
             cursor: pointer;

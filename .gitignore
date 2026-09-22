@@ -39,5 +39,4 @@ export/*.json
 Thumbs.db
 
 # OpenCode agent state
-.omo/
 .playwright-mcp/

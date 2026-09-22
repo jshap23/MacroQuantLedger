@@ -162,15 +162,17 @@ def _inject_css() -> None:
             min-height:1.1rem; color:var(--text-muted); font-size:0.75rem;
             line-height:1.45; font-style:italic;
         }
-        .interview-replay-btn {
-            background:transparent !important; color:#a78bfa !important;
-            border:1px solid #a78bfa55 !important; box-shadow:none !important;
-            font-family:'IBM Plex Mono',monospace !important; font-size:0.72rem !important;
-            border-radius:4px !important; padding:0.2rem 0.7rem !important;
-            min-height:28px !important; line-height:1 !important;
-            text-transform:none !important; letter-spacing:normal !important;
+        @layer overrides {
+            .interview-replay-btn {
+                background:transparent !important; color:#a78bfa !important;
+                border:1px solid #a78bfa55 !important; box-shadow:none !important;
+                font-family:'IBM Plex Mono',monospace !important; font-size:0.72rem !important;
+                border-radius:4px !important; padding:0.2rem 0.7rem !important;
+                min-height:28px !important; line-height:1 !important;
+                text-transform:none !important; letter-spacing:normal !important;
+            }
+            .interview-replay-btn:hover { background:#a78bfa1a !important; }
         }
-        .interview-replay-btn:hover { background:#a78bfa1a !important; }
         .interview-tts-status {
             color:var(--text-faint); font-size:0.68rem; min-height:1rem;
             font-family:'IBM Plex Mono',monospace;
@@ -183,6 +185,9 @@ def _inject_css() -> None:
             width:calc(33.333% - 0.55rem); min-width:220px; min-height:88px;
             align-items:flex-start !important; text-align:left; padding:0.8rem !important;
             border:1px solid var(--border-strong); background:var(--bg-card);
+        }
+        @layer overrides {
+            .q-btn.interview-quick { background:var(--bg-card) !important; }
         }
         .interview-quick .q-btn__content {
             align-items:flex-start; text-align:left; white-space:pre-line;
@@ -325,7 +330,52 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
         def open_views(view_ids, style="Deliver"):
             state.update(session=None, pending=None, retrying=False, view_setup={"ids": list(view_ids), "style": style})
             refresh()
+
+        def show_surprise_setup(view) -> None:
+            state.update(
+                session=None, pending=None, retrying=False,
+                models_setup=None,
+                view_setup={"ids": [view.id], "style": "Deliver", "surprise": True},
+            )
+            refresh()
+
+        async def start_surprise_views() -> None:
+            active = [
+                view for view in (app_state.topic_views if app_state else [])
+                if not view.archived
+            ]
+            if not active:
+                state.update(
+                    session=None, pending=None, retrying=False,
+                    models_setup=None, view_setup=None,
+                )
+                refresh()
+                return
+            selected = _pick_recent(active, "views")
+            if not llm_available():
+                show_surprise_setup(selected)
+                return
+            preset = get_preset("view_deliver")
+            chosen_model = preferred_model() or interview_model()
+            save_preferred_model(chosen_model)
+            try:
+                session = await run.io_bound(lambda: start_session(
+                    mode=preset.mode, preset_key=preset.key,
+                    topic=selected.name,
+                    materials="", view_ids=[selected.id],
+                    practice_style="Deliver", view_context=views_context([selected]),
+                    initial_question=f"What's your view on {selected.name}?",
+                    target_questions=preset.default_questions,
+                    model=chosen_model,
+                ))
+            except Exception:
+                show_surprise_setup(selected)
+                return
+            state.update(session=session, pending=None, retrying=False, view_setup=None)
+            refresh()
+
         launch_bridge["open"] = open_views
+        launch_bridge["surprise"] = start_surprise_views
     refresh()
 
 

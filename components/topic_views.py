@@ -52,7 +52,7 @@ def _inject_css() -> None:
       .tv-tag-chip .q-chip__icon--remove{color:var(--text-muted)!important;opacity:.65!important;margin-left:.3rem!important;font-size:.85em!important;cursor:pointer!important}
       .tv-tag-chip .q-chip__icon--remove:hover{opacity:1!important;color:var(--accent)!important}
       .tv-tag-input{max-width:220px}
-      .tv-tag-add-btn{color:var(--accent)!important}
+      @layer overrides{.tv-tag-add-btn{color:var(--accent)!important}}
       .tv-sort-select{min-width:132px}.tv-sort-select .q-field__control{min-height:26px!important;padding:0 .45rem!important;border:1px solid var(--border)!important;border-radius:99px!important;background:var(--bg-input)!important}.tv-sort-select .q-field__native{font:600 .65rem 'IBM Plex Mono',monospace!important;color:var(--text-muted)!important;padding-top:0!important;padding-bottom:0!important;min-height:26px!important}.tv-sort-select .q-field__marginal{height:26px!important;color:var(--text-muted)!important;font-size:.85rem!important}
       @media(max-width:650px){.tv-point{padding:.7rem}.tv-point-head{grid-template-columns:24px 1fr}.tv-point-head>.tv-actions{grid-column:2}.tv-fact{grid-template-columns:20px 1fr}.tv-fact>.tv-actions{grid-column:2}}
     </style>''')

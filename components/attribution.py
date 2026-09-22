@@ -14,8 +14,6 @@ from services.attribution import (
     AttributionSummary,
 )
 
-_CSS_INJECTED = False
-
 # ── Hardcoded dark-theme palette (matches fred_panel.py) ──────────────────────
 _BG      = "#17171e"
 _BORDER  = "#2a2a38"
@@ -30,10 +28,6 @@ _MONO    = "'IBM Plex Mono','Courier New',monospace"
 
 
 def _inject_css():
-    global _CSS_INJECTED
-    if _CSS_INJECTED:
-        return
-    _CSS_INJECTED = True
     ui.add_head_html('''<style id="mq-attribution-css">
         .attr-summary-card {
             background: var(--bg-card);

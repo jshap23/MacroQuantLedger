@@ -349,18 +349,20 @@ body.light-mode .live-dot {
 .asset-row-l2:hover { background: var(--bg-hover); }
 .asset-row-l2:last-child { border-bottom: none; }
 .asset-score-control { display:flex; gap:3px; align-items:center; flex-shrink:0; }
-.asset-score-button {
-    min-width:30px !important; width:30px !important; min-height:30px !important;
-    padding:0 !important; background:var(--bg-input) !important;
-    color:var(--text-muted) !important; border:1px solid var(--border) !important;
-    border-radius:5px !important; box-shadow:none !important;
-    font:700 0.74rem var(--font-data) !important;
+@layer overrides {
+    .q-btn.asset-score-button {
+        min-width:30px !important; width:30px !important; min-height:30px !important;
+        padding:0 !important; background:var(--bg-input) !important;
+        color:var(--text-muted) !important; border:1px solid var(--border) !important;
+        border-radius:5px !important; box-shadow:none !important;
+        font:700 0.74rem var(--font-data) !important;
+    }
+    .asset-score-control.compact .asset-score-button {
+        min-width:23px !important; width:23px !important; min-height:27px !important;
+    }
+    .q-btn.asset-score-button:hover { border-color:var(--accent) !important; color:var(--text-primary) !important; }
+    .q-btn.asset-score-button.is-active { transform:translateY(-1px); box-shadow:0 3px 10px #0003 !important; }
 }
-.asset-score-control.compact .asset-score-button {
-    min-width:23px !important; width:23px !important; min-height:27px !important;
-}
-.asset-score-button:hover { border-color:var(--accent) !important; color:var(--text-primary) !important; }
-.asset-score-button.is-active { transform:translateY(-1px); box-shadow:0 3px 10px #0003 !important; }
 
 /* ── Reconciliation ── */
 .recon-form-card {
@@ -380,53 +382,60 @@ body.light-mode .live-dot {
     transition: border-color 0.15s;
 }
 
-/* ── Buttons ── */
-.add-btn {
-    background: transparent !important;
-    border: 1px dashed var(--border-strong) !important;
-    color: var(--text-muted) !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size: 0.75rem !important;
-    width: 100% !important;
-    border-radius: 4px !important;
-    box-shadow: none !important;
-    transition: border-color 0.15s, color 0.15s !important;
-}
-.add-btn:hover {
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
-    background: var(--accent-glow) !important;
-}
-.remove-btn {
-    background: transparent !important;
-    color: var(--text-faint) !important;
-    font-size: 0.8rem !important;
-    padding: 2px 7px !important;
-    min-height: unset !important;
-    border-radius: 4px !important;
-    box-shadow: none !important;
-    transition: color 0.12s, background 0.12s !important;
-}
-.remove-btn:hover {
-    color: #f87171 !important;
-    background: #3a111122 !important;
-}
-.submit-btn {
-    background: var(--accent) !important;
-    color: #fff !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-weight: 700 !important;
-    border-radius: 4px !important;
-    box-shadow: none !important;
-}
-.submit-btn:hover { opacity: 0.88 !important; }
-.cancel-btn {
-    background: transparent !important;
-    color: var(--text-muted) !important;
-    border: 1px solid var(--border) !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    border-radius: 4px !important;
-    box-shadow: none !important;
+/* ── Buttons ──
+   Quasar ships .bg-primary/.text-white as !important rules inside CSS layers,
+   and a layered !important beats an unlayered one regardless of specificity.
+   These overrides therefore live in the existing `overrides` layer, which is
+   declared ahead of `utilities`, so the app's button styling wins instead of
+   the default primary blue. */
+@layer overrides {
+    .q-btn.add-btn {
+        background: transparent !important;
+        border: 1px dashed var(--border-strong) !important;
+        color: var(--text-muted) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 0.75rem !important;
+        width: 100% !important;
+        border-radius: 4px !important;
+        box-shadow: none !important;
+        transition: border-color 0.15s, color 0.15s !important;
+    }
+    .q-btn.add-btn:hover {
+        border-color: var(--accent) !important;
+        color: var(--accent) !important;
+        background: var(--accent-glow) !important;
+    }
+    .q-btn.remove-btn {
+        background: transparent !important;
+        color: var(--text-faint) !important;
+        font-size: 0.8rem !important;
+        padding: 2px 7px !important;
+        min-height: unset !important;
+        border-radius: 4px !important;
+        box-shadow: none !important;
+        transition: color 0.12s, background 0.12s !important;
+    }
+    .q-btn.remove-btn:hover {
+        color: #f87171 !important;
+        background: #3a111122 !important;
+    }
+    .q-btn.submit-btn {
+        background: var(--accent) !important;
+        color: #fff !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-weight: 700 !important;
+        border-radius: 4px !important;
+        box-shadow: none !important;
+    }
+    .q-btn.submit-btn:hover { opacity: 0.88 !important; }
+    .q-btn.cancel-btn {
+        background: transparent !important;
+        color: var(--text-muted) !important;
+        border: 1px solid var(--border) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        border-radius: 4px !important;
+        box-shadow: none !important;
+    }
 }
 
 /* ── Today ── */
@@ -516,37 +525,39 @@ body.light-mode .live-dot {
     color: #f87171 !important;
     border-color: #f8717144 !important;
 }
-.theme-btn {
-    background: transparent !important;
-    color: var(--text-muted) !important;
-    border: 1px solid var(--border) !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    border-radius: 4px !important;
-    box-shadow: none !important;
-    min-width: 2.2rem !important;
-    padding: 0 0.5rem !important;
-    transition: transform 0.15s, color 0.15s, border-color 0.15s !important;
-}
-.theme-btn:hover {
-    color: var(--accent) !important;
-    border-color: var(--accent) !important;
-    transform: scale(1.12);
-}
-.menu-btn {
-    background: transparent !important;
-    color: var(--text-muted) !important;
-    border: 1px solid var(--border) !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    border-radius: 4px !important;
-    box-shadow: none !important;
-    min-width: 2.2rem !important;
-    padding: 0 0.6rem !important;
-    letter-spacing: 0.15em !important;
-    font-size: 0.85rem !important;
-}
-.menu-btn:hover {
-    color: var(--accent) !important;
-    border-color: var(--accent) !important;
+@layer overrides {
+    .theme-btn {
+        background: transparent !important;
+        color: var(--text-muted) !important;
+        border: 1px solid var(--border) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        border-radius: 4px !important;
+        box-shadow: none !important;
+        min-width: 2.2rem !important;
+        padding: 0 0.5rem !important;
+        transition: transform 0.15s, color 0.15s, border-color 0.15s !important;
+    }
+    .theme-btn:hover {
+        color: var(--accent) !important;
+        border-color: var(--accent) !important;
+        transform: scale(1.12);
+    }
+    .menu-btn {
+        background: transparent !important;
+        color: var(--text-muted) !important;
+        border: 1px solid var(--border) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        border-radius: 4px !important;
+        box-shadow: none !important;
+        min-width: 2.2rem !important;
+        padding: 0 0.6rem !important;
+        letter-spacing: 0.15em !important;
+        font-size: 0.85rem !important;
+    }
+    .menu-btn:hover {
+        color: var(--accent) !important;
+        border-color: var(--accent) !important;
+    }
 }
 .overflow-menu {
     background: var(--bg-card) !important;
@@ -642,7 +653,7 @@ def index():
     saved_ref = {"el": None}
     status_container = {"el": None}
     navigation = {"primary": {}, "secondary": {}}
-    practice_bridge = {"open": None}
+    practice_bridge = {"open": None, "surprise": None}
     views_bridge = {"open": None}
 
     def navigate(section: str, destination: str | None = None):
@@ -660,6 +671,13 @@ def index():
         if opener:
             opener(view_ids, style)
         navigate("practice")
+        ui.run_javascript("window.scrollTo({top:0,behavior:'smooth'})")
+
+    async def practice_surprise():
+        opener = practice_bridge.get("surprise")
+        navigate("practice")
+        if opener:
+            await opener()
         ui.run_javascript("window.scrollTo({top:0,behavior:'smooth'})")
 
     def review_view(view_id):
@@ -1056,7 +1074,7 @@ def index():
 
     with ui.tab_panels(tabs, value=tab_today).classes("w-full"):
         with ui.tab_panel(tab_today):
-            render_today(s, save_indicator, navigate)
+            render_today(s, save_indicator, navigate, practice_surprise)
 
         with ui.tab_panel(tab_views):
             with ui.tabs().props('align="left"').classes("secondary-tabs w-full") as views_tabs:

@@ -53,14 +53,7 @@ STARTER_GUIDANCE = {
     },
 }
 
-_CSS_INJECTED = False
-
-
 def _inject_css():
-    global _CSS_INJECTED
-    if _CSS_INJECTED:
-        return
-    _CSS_INJECTED = True
     ui.add_head_html('''<style id="mq-macro-views-css">
         .mv-card {
             background: var(--bg-card);
@@ -93,17 +86,19 @@ def _inject_css():
             font-size: 0.66rem; white-space: nowrap; flex-shrink: 0;
             font-family: 'IBM Plex Mono', monospace; font-weight: 600;
         }
-        .mv-details-btn {
-            background: transparent !important; color: var(--text-muted) !important;
-            border: 1px solid var(--border) !important; border-radius: 5px !important;
-            box-shadow: none !important; font-family: var(--font-ui) !important;
-            font-size: 0.66rem !important; font-weight: 600 !important;
-            padding: 0.18rem 0.55rem !important; min-height: unset !important;
-            text-transform: none !important; flex-shrink: 0; cursor: pointer;
-            transition: border-color 0.12s, color 0.12s;
-        }
-        .mv-details-btn:hover {
-            border-color: var(--accent) !important; color: var(--accent) !important;
+        @layer overrides {
+            .mv-details-btn {
+                background: transparent !important; color: var(--text-muted) !important;
+                border: 1px solid var(--border) !important; border-radius: 5px !important;
+                box-shadow: none !important; font-family: var(--font-ui) !important;
+                font-size: 0.66rem !important; font-weight: 600 !important;
+                padding: 0.18rem 0.55rem !important; min-height: unset !important;
+                text-transform: none !important; flex-shrink: 0; cursor: pointer;
+                transition: border-color 0.12s, color 0.12s;
+            }
+            .mv-details-btn:hover {
+                border-color: var(--accent) !important; color: var(--accent) !important;
+            }
         }
         .mv-thesis-line {
             font-size: 0.82rem; color: var(--text-muted);
@@ -135,23 +130,25 @@ def _inject_css():
             letter-spacing: 0.14em; font-family: 'IBM Plex Mono', monospace;
             margin-right: 0.1rem; flex-shrink: 0; min-width: 4.6rem;
         }
-        .mv-chip {
-            padding: 0.16rem 0.6rem !important; border-radius: 999px !important;
-            font-size: 0.68rem !important; font-weight: 600 !important;
-            font-family: var(--font-ui) !important;
-            background: transparent !important; color: var(--text-faint) !important;
-            border: 1px solid var(--border) !important; box-shadow: none !important;
-            cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s;
-            white-space: nowrap; user-select: none; text-transform: none !important;
-            min-height: unset !important; line-height: 1.4;
-        }
-        .mv-chip:hover {
-            border-color: var(--border-strong) !important;
-            color: var(--text-muted) !important;
-        }
-        .mv-chip.is-active {
-            color: var(--accent) !important; border-color: var(--accent) !important;
-            background: var(--accent-glow) !important;
+        @layer overrides {
+            .mv-chip {
+                padding: 0.16rem 0.6rem !important; border-radius: 999px !important;
+                font-size: 0.68rem !important; font-weight: 600 !important;
+                font-family: var(--font-ui) !important;
+                background: transparent !important; color: var(--text-faint) !important;
+                border: 1px solid var(--border) !important; box-shadow: none !important;
+                cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s;
+                white-space: nowrap; user-select: none; text-transform: none !important;
+                min-height: unset !important; line-height: 1.4;
+            }
+            .mv-chip:hover {
+                border-color: var(--border-strong) !important;
+                color: var(--text-muted) !important;
+            }
+            .mv-chip.is-active {
+                color: var(--accent) !important; border-color: var(--accent) !important;
+                background: var(--accent-glow) !important;
+            }
         }
         .mv-drawer-card {
             width: min(460px, 95vw); height: 100vh;

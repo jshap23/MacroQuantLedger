@@ -26,7 +26,12 @@ def _metric_card(value: str, label: str, detail: str, on_click) -> None:
         ui.label(detail).classes("today-metric-detail")
 
 
-def render_today(state: AppState, save_indicator, navigate) -> None:
+def render_today(
+    state: AppState,
+    save_indicator,
+    navigate,
+    on_practice_surprise=None,
+) -> None:
     now = datetime.now(tz=timezone.utc)
     hour = now.astimezone().hour
     greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
@@ -45,10 +50,15 @@ def render_today(state: AppState, save_indicator, navigate) -> None:
             ui.label("TODAY").classes("today-eyebrow")
             ui.label(greeting).classes("today-title")
         with ui.row().classes("today-actions"):
+            if on_practice_surprise is not None:
+                ui.button(
+                    "Surprise Me (Views)", icon="shuffle",
+                    on_click=on_practice_surprise,
+                ).classes("submit-btn")
             ui.button(
                 "My Views", icon="account_tree",
                 on_click=lambda: navigate("views", "my_views"),
-            ).classes("submit-btn")
+            ).classes("cancel-btn")
             ui.button(
                 "Open morning briefing", icon="auto_awesome",
                 on_click=lambda: navigate("research", "briefing"),
