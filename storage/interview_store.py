@@ -58,6 +58,24 @@ def save_preferred_model(model: str) -> None:
         save_database(database)
 
 
+def _same_model_runs(runs: list[tuple[str, int]]) -> list[list[tuple[str, int]]]:
+    """Split a chronological (model, score) series wherever the model changes.
+
+    Scores are only comparable within a single grader, so a model switch starts
+    a new run that must not be averaged against the previous one.
+    """
+    segments: list[list[tuple[str, int]]] = []
+    current: list[tuple[str, int]] = []
+    for model, score in runs:
+        if current and model != current[-1][0]:
+            segments.append(current)
+            current = []
+        current.append((model, score))
+    if current:
+        segments.append(current)
+    return segments
+
+
 def performance_summary() -> dict:
     sessions = load_database().sessions
     completed = [s for s in sessions if s.status == "completed"]
@@ -66,6 +84,7 @@ def performance_summary() -> dict:
     tags = Counter(tag for answer in answers for tag in answer.failure_tags)
     weak_topics: Counter[str] = Counter()
     topic_scores: dict[str, list[int]] = defaultdict(list)
+    topic_runs: dict[str, list[tuple[str, int]]] = defaultdict(list)
     due: list[dict] = []
     review_concepts: list[dict] = []
     topic_last: dict[str, date] = {}
@@ -82,6 +101,9 @@ def performance_summary() -> dict:
             scores = [a.score for a in question.answers if a.score is not None]
             if scores:
                 topic_scores[question_topic].extend(scores)
+                topic_runs[question_topic].extend(
+                    (session.model or "", score) for score in scores
+                )
             if question.should_return:
                 weak_topics[question_topic] += 1
                 review_concepts.append({
@@ -97,12 +119,20 @@ def performance_summary() -> dict:
                     })
 
     improving: list[str] = []
-    for topic, scores in topic_scores.items():
-        if len(scores) >= 4:
-            split = max(1, len(scores) // 2)
-            first, second = scores[:split], scores[split:]
-            if second and sum(second) / len(second) > sum(first) / len(first) + 0.5:
-                improving.append(topic)
+    for topic, runs in topic_runs.items():
+        # Only the most recent unbroken same-model run is comparable. An older
+        # grader's run must not flag a topic after the model changed, and scores
+        # from different models are never averaged together.
+        segments = _same_model_runs(runs)
+        if not segments:
+            continue
+        scores = [score for _, score in segments[-1]]
+        if len(scores) < 4:
+            continue
+        split = max(1, len(scores) // 2)
+        first, second = scores[:split], scores[split:]
+        if second and sum(second) / len(second) > sum(first) / len(first) + 0.5:
+            improving.append(topic)
 
     return {
         "questions_answered": len(answered_questions),
@@ -162,6 +192,113 @@ def mark_review(question, score: int | None, tags: list[str], is_retry: bool) ->
         question.next_review_date = date.today() + timedelta(days=delay)
 
 
+def recent_answers(
+    topic: str | None = None,
+    practice_style: str | None = None,
+    model: str | None = None,
+    limit: int = 10,
+    preset_key: str | None = None,
+) -> list[dict]:
+    """Completed sessions only, newest-first, flattened to individual answers.
+
+    Filters on ``practice_style`` and ``preset_key`` rather than ``mode``: a
+    Deliver session has ``mode == "Discussion"`` but ``practice_style ==
+    "Deliver"`` and ``preset_key == "view_deliver"``, while a model Defend
+    session shares ``practice_style == "Defend"`` with a View Defend session
+    and is only distinguished by ``preset_key``.
+    """
+    rows: list[tuple[datetime, dict]] = []
+    for session in load_database().sessions:
+        if session.status != "completed":
+            continue
+        if practice_style is not None and session.practice_style != practice_style:
+            continue
+        if preset_key is not None and session.preset_key != preset_key:
+            continue
+        if model is not None and session.model != model:
+            continue
+        if topic is not None and session.topic != topic:
+            continue
+        for question in session.questions:
+            for answer in question.answers:
+                submitted = answer.submitted_at
+                if submitted.tzinfo is None:
+                    submitted = submitted.replace(tzinfo=timezone.utc)
+                rows.append((submitted, {
+                    "session_id": session.id,
+                    "text": answer.text,
+                    "score": answer.score,
+                    "failure_tags": list(answer.failure_tags),
+                    "is_retry": answer.is_retry,
+                    "submitted_at": submitted,
+                    "topic": question.topic or session.topic,
+                    "practice_style": session.practice_style,
+                    "preset_key": session.preset_key,
+                    "model": session.model,
+                }))
+    rows.sort(key=lambda item: item[0], reverse=True)
+    return [row for _, row in rows[:max(0, limit)]]
+
+
+def gone_quiet_tags(
+    reps: list[dict], minimum: int = 2, max_streak: int = 10, limit: int = 2,
+) -> list[tuple[str, int]]:
+    """Tags that went quiet after being an active, recent weakness.
+
+    One absence is noise, so a tag is only called out once it has been absent
+    from at least ``minimum`` consecutive reps. It must also have been flagged
+    within the last ``max_streak`` reps: a tag last seen deep in the history is
+    not a weakness that was fixed, so its absence is padding rather than
+    progress. Returns at most ``limit`` streaks, longest first.
+    """
+    if len(reps) <= minimum:
+        return []
+    seen = {tag for rep in reps[minimum:] for tag in rep["failure_tags"]}
+    results: list[tuple[str, int]] = []
+    for tag in seen:
+        streak = 0
+        for rep in reps:
+            if tag in rep["failure_tags"]:
+                break
+            streak += 1
+        if minimum <= streak <= max_streak:
+            results.append((tag, streak))
+    results.sort(key=lambda item: (-item[1], item[0]))
+    return results[:limit]
+
+
+def practice_pulse(window: int = 20, limit: int = 200) -> dict:
+    """Forward-looking signals for the Practice home strip.
+
+    Returns the most persistent recent tag (only when there is a clear leader),
+    the count of reps in the last seven days, and tags that have gone quiet
+    after being a recent weakness (same gate as the postmortem line, so the two
+    surfaces never disagree). Callers omit any empty signal rather than
+    rendering a zero.
+    """
+    reps = recent_answers(limit=limit)
+    window_reps = reps[:window]
+
+    most_persistent = None
+    if len(window_reps) >= 10:
+        counts = Counter(tag for rep in window_reps for tag in rep["failure_tags"])
+        ranked = counts.most_common()
+        if ranked and (len(ranked) == 1 or ranked[0][1] > ranked[1][1]):
+            most_persistent = ranked[0][0]
+
+    not_flagged: list[str] = []
+    if len(window_reps) >= 10:
+        not_flagged = [tag for tag, _ in gone_quiet_tags(window_reps, limit=2)]
+
+    week = datetime.now(timezone.utc) - timedelta(days=7)
+    reps_this_week = sum(1 for rep in reps if rep["submitted_at"] >= week)
+    return {
+        "most_persistent": most_persistent,
+        "reps_this_week": reps_this_week,
+        "not_flagged": not_flagged,
+    }
+
+
 def model_practice_stats() -> dict[str, dict]:
     """Per-note practice history for model-note practice sessions."""
     notes: dict[str, dict] = {}
@@ -210,7 +347,7 @@ def model_practice_stats() -> dict[str, dict]:
 def view_practice_stats(window_days: int = 182) -> dict[str, dict]:
     """Per-View scored-practice history derived from completed View sessions."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-    views: dict[str, list[tuple[datetime, date, float | None]]] = {}
+    views: dict[str, list[tuple[datetime, date, float | None, str]]] = {}
     for session in load_database().sessions:
         if session.status != "completed" or not session.view_ids or session.completed_at is None:
             continue
@@ -225,10 +362,22 @@ def view_practice_stats(window_days: int = 182) -> dict[str, dict]:
         ]
         run_score = round(sum(scores) / len(scores), 1) if scores else None
         for view_id in session.view_ids:
-            views.setdefault(view_id, []).append((completed, completed.date(), run_score))
+            views.setdefault(view_id, []).append(
+                (completed, completed.date(), run_score, session.model or "")
+            )
 
     stats: dict[str, dict] = {}
-    for view_id, runs in views.items():
+    for view_id, all_runs in views.items():
+        ordered = sorted(all_runs, key=lambda run: run[0])
+        # Use only the most recent unbroken run from a single grader. A model
+        # change resets the series instead of mixing incomparable scores.
+        current_model = ordered[-1][3]
+        runs = []
+        for run in reversed(ordered):
+            if run[3] != current_model:
+                break
+            runs.append(run)
+        runs.reverse()
         scored_all = sorted(
             (run for run in runs if run[2] is not None),
             key=lambda run: run[0],

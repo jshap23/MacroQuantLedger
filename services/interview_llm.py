@@ -18,6 +18,7 @@ FAILURE_TAGS = {
 }
 
 INTERVIEW_MODELS_OPENROUTER = [
+    "z-ai/glm-5.3",
     "deepseek/deepseek-v4.1-flash",
     "openai/gpt-5.6-luna",
     "deepseek/deepseek-v4-pro-0813",
@@ -87,6 +88,11 @@ def selectable_models() -> list[str]:
     return list(dict.fromkeys([configured, *_interview_models()]))
 
 
+def grader_model() -> str:
+    """Default grader for scored View practice; still user-overridable per session."""
+    return user_settings.interview_grader_model()
+
+
 def available() -> bool:
     return bool(user_settings.llm_api_key(_provider()))
 
@@ -129,7 +135,13 @@ class OpenAICompatibleProvider:
             lowered = str(exc).lower()
             dropped = False
             if "reasoning" in lowered and "extra_body" in kwargs:
-                kwargs.pop("extra_body")
+                if "mandatory" in lowered or "cannot be disabled" in lowered:
+                    # Some models (e.g. GLM 5.3) refuse to disable reasoning.
+                    # Minimize it instead of dropping the hint, so reasoning
+                    # cannot silently starve the compact response budget.
+                    kwargs["extra_body"] = {"reasoning": {"effort": "minimal"}}
+                else:
+                    kwargs.pop("extra_body")
                 dropped = True
             if ("response_format" in lowered or "json_object" in lowered) and "response_format" in kwargs:
                 kwargs.pop("response_format")

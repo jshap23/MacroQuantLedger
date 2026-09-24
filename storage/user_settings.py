@@ -179,6 +179,20 @@ def save_llm_model(provider: str, value: str) -> None:
         _write(settings)
 
 
+def interview_grader_model() -> str:
+    """Default model used to grade scored View practice.
+
+    This is a default selection, not a hard pin: the model remains selectable
+    per session. It exists so the grader can be changed in one place later.
+    """
+    configured = _strip(os.environ.get("INTERVIEW_GRADER_MODEL"))
+    if configured:
+        return configured
+    if llm_provider() == app_config.LLM_PROVIDER_OPENCODE_GO:
+        return app_config.INTERVIEW_GRADER_MODEL_OPENCODE_GO_DEFAULT
+    return app_config.INTERVIEW_GRADER_MODEL_OPENROUTER_DEFAULT
+
+
 def research_summary_model() -> str:
     provider = llm_provider()
     env_key = "OPENCODE_RESEARCH_MODEL" if provider == app_config.LLM_PROVIDER_OPENCODE_GO else "OPENROUTER_RESEARCH_MODEL"

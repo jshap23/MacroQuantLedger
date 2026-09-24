@@ -25,6 +25,10 @@ class InterviewAnswer(BaseModel):
     failure_tags: list[str] = Field(default_factory=list)
     critique: str = ""
     is_retry: bool = False
+    # True when the answer was dictated and submitted as a raw speech-to-text
+    # transcript rather than typed. Used to scope the grader's transcription
+    # safety net and to keep voice-vs-typed grading auditable.
+    voice: bool = False
 
 
 class InterviewQuestion(BaseModel):
@@ -71,10 +75,14 @@ class InterviewSession(BaseModel):
     weakness_session: bool = False
     model: str = ""
     compact_brief: str = ""
+    surprise: bool = False
     pending_move: dict = Field(default_factory=dict)
     status: Literal["active", "completed", "abandoned"] = "active"
     questions: list[InterviewQuestion] = Field(default_factory=list)
     postmortem: Optional[InterviewPostmortem] = None
+    # Cached on demand from the postmortem "Show a strong version" button so a
+    # re-render never re-bills the extra LLM call.
+    reference_answer: str = ""
 
 
 class InterviewDatabase(BaseModel):

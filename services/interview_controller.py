@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 from models.interview import InterviewAnswer, InterviewPostmortem, InterviewQuestion, InterviewSession
@@ -14,7 +15,76 @@ from services.interview_prompts import (
 from storage.interview_store import get_session, mark_review, save_session, weakness_context
 
 
-def _system(session: InterviewSession, current_session_state: str) -> str:
+# Anchored scoring rubric for the shared 1-10 score field. Kept as one constant
+# so the reference-answer prompt can cite the same 7-8 bar without drifting.
+SCORE_RUBRIC = (
+    "integer 1-10, graded against this rubric:\n"
+    "  1-2  Did not answer the question asked, or the core claim is wrong.\n"
+    "  3-4  Relevant content, but no clear bottom line; factors named without mechanism.\n"
+    "  5-6  Clear view stated; partial mechanism; evidence thin, vague, or unsupported.\n"
+    "  7-8  Bottom line first; at least one causal chain explained end to end; evidence\n"
+    "       with magnitudes; states what would falsify the view.\n"
+    "  9-10 All of 7-8, plus handles the strongest counterargument and translates the\n"
+    "       view into an implementable decision.\n"
+    "Grade the answer as given, against the rubric. Do not grade on a curve. Do not\n"
+    "withhold 7+ from an answer that meets the 7-8 bar. Most practice answers land\n"
+    "3-6; that is expected and is not a reason to compress the scale further."
+)
+
+# SCORE_RUBRIC is the only definition of the bands. These patterns read them back
+# out of it so the postmortem can print a band verbatim and never drift from the
+# rubric text.
+_BAND_LINE = re.compile(r"^ {2}(\d+)-(\d+)\s+(.*)$")
+_BAND_CONT = re.compile(r"^ {7}(\S.*)$")
+
+
+def rubric_bands() -> list[tuple[str, str]]:
+    """The five rubric bands as (label, descriptor), verbatim from SCORE_RUBRIC.
+
+    Descriptors wrapped over two source lines are joined with a single space so
+    a band can be shown on one line without rewording anything.
+    """
+    bands: list[tuple[str, str]] = []
+    current: list[str] | None = None
+    for line in SCORE_RUBRIC.splitlines():
+        match = _BAND_LINE.match(line)
+        if match:
+            if current:
+                bands.append((current[0], current[1]))
+            current = [f"{match.group(1)}-{match.group(2)}", match.group(3).strip()]
+            continue
+        continuation = _BAND_CONT.match(line)
+        if continuation and current:
+            current[1] = f"{current[1]} {continuation.group(1).strip()}"
+            continue
+        if current:
+            bands.append((current[0], current[1]))
+            current = None
+    if current:
+        bands.append((current[0], current[1]))
+    return bands
+
+
+def rubric_band_for(score: int | None) -> tuple[str, str, str | None] | None:
+    """Map a 1-10 score to (band label, descriptor, next band descriptor).
+
+    The next-band descriptor is None for the top band (9-10), which has no
+    higher band to point at.
+    """
+    if score is None:
+        return None
+    bands = rubric_bands()
+    for index, (label, descriptor) in enumerate(bands):
+        low, high = (int(part) for part in label.split("-"))
+        if low <= score <= high:
+            following = bands[index + 1][1] if index + 1 < len(bands) else None
+            return (label, descriptor, following)
+    return None
+
+
+def _system(
+    session: InterviewSession, current_session_state: str, transcript_note: bool = False,
+) -> str:
     return compose_runtime_prompt(
         preset_key=session.preset_key,
         mode=session.mode,
@@ -25,6 +95,7 @@ def _system(session: InterviewSession, current_session_state: str) -> str:
         model_context=session.model_context,
         current_session_state=current_session_state,
         prompt_override=session.prompt_override,
+        transcript_note=transcript_note,
     )
 
 
@@ -93,6 +164,7 @@ def start_session(
     model_note_titles: list[str] | None = None,
     model_context: str = "",
     initial_question: str = "",
+    surprise: bool = False,
     provider: LLMProvider | None = None,
 ) -> InterviewSession:
     preset = get_preset(preset_key, mode)
@@ -114,6 +186,7 @@ def start_session(
         target_questions=max(1, min(50, int(target_questions))),
         weakness_session=weakness_session or preset.key == "weaknesses",
         model=interview_model(model),
+        surprise=surprise,
     )
     # The opening question is deterministic. This makes practice immediately
     # available with providers that do not reliably honor JSON mode (notably
@@ -149,8 +222,8 @@ def _compact_critique(value) -> str:
 def _evaluation_schema(final_turn: bool) -> dict:
     """Keep ordinary turns compact; postmortems belong only to the final turn."""
     schema = {
-        "score": "integer 1-10; hidden by UI outside Drill",
-        "failure_tags": "array, maximum 2",
+        "score": SCORE_RUBRIC,
+        "failure_tags": "array, maximum 3",
         "critique": "maximum 2 sentences and 60 words; empty outside Drill",
         "materially_weak": "boolean",
         "next_question": "one candidate-facing question, or empty if done",
@@ -169,7 +242,6 @@ def _evaluation_schema(final_turn: bool) -> dict:
                 "communication": "include questions where knowledge was present but communication failed when relevant",
                 "pressure handling": "",
             },
-            "trend": "improving, unchanged, or worsening when history supports it",
         }
     return schema
 
@@ -190,6 +262,7 @@ def evaluate_answer(
     session_id: str,
     answer_text: str,
     is_retry: bool = False,
+    voice_origin: bool = False,
     provider: LLMProvider | None = None,
 ) -> tuple[InterviewSession, dict]:
     session = get_session(session_id)
@@ -213,7 +286,7 @@ def evaluate_answer(
     llm = provider or default_provider()
     raw = llm.complete(
         [
-            {"role": "system", "content": _system(session, json.dumps(prompt))},
+            {"role": "system", "content": _system(session, json.dumps(prompt), transcript_note=voice_origin)},
             {"role": "user", "content": "Make the next interviewer move using the required JSON schema."},
         ],
         CompletionOptions(model=session.model or interview_model(), max_tokens=650 if final_turn else 350),
@@ -225,7 +298,7 @@ def evaluate_answer(
         # the already-scoped compact contract instead of losing the answer.
         recovery = llm.complete(
             [
-                {"role": "system", "content": _system(session, json.dumps(prompt))},
+                {"role": "system", "content": _system(session, json.dumps(prompt), transcript_note=voice_origin)},
                 {"role": "user", "content": (
                     "Your previous response was malformed. Return valid JSON only using "
                     "the exact required schema, with no preamble or extra fields."
@@ -243,7 +316,7 @@ def evaluate_answer(
     if not (bool(data.get("done")) or final_turn) and not _has_question(data, session.topic):
         recovery = llm.complete(
             [
-                {"role": "system", "content": _system(session, json.dumps(prompt))},
+                {"role": "system", "content": _system(session, json.dumps(prompt), transcript_note=voice_origin)},
                 {"role": "user", "content": "Ask one concise follow-up question only. Return plain text; no JSON, analysis, score, or preamble."},
             ],
             CompletionOptions(
@@ -259,11 +332,11 @@ def evaluate_answer(
     except (TypeError, ValueError):
         score = None
     raw_tags = data.get("failure_tags") if isinstance(data.get("failure_tags"), list) else []
-    tags = [str(tag) for tag in raw_tags if str(tag) in FAILURE_TAGS][:2]
+    tags = [str(tag) for tag in raw_tags if str(tag) in FAILURE_TAGS][:3]
     critique = _compact_critique(data.get("critique"))
     question.answers.append(InterviewAnswer(
         text=answer_text.strip(), score=score, failure_tags=tags,
-        critique=critique, is_retry=is_retry,
+        critique=critique, is_retry=is_retry, voice=voice_origin,
     ))
     mark_review(question, score, tags, is_retry)
 
@@ -400,3 +473,60 @@ def answer_tips(
         ),
     )
     return raw.strip() or "No tips were returned. Review the answer for a clear conclusion and supporting mechanism."
+
+
+def reference_answer(
+    session_id: str,
+    provider: LLMProvider | None = None,
+) -> str:
+    """Return (and cache) a model answer that would score 7-8 on the rubric.
+
+    Strictly click-gated by the UI: this is the only path that produces a model
+    answer, and only after the session is over. The result is cached on the
+    session so a re-render never re-bills the extra call.
+    """
+    session = get_session(session_id)
+    if session is None or session.status != "completed":
+        raise RuntimeError("A reference answer is only available after a completed session.")
+    if session.reference_answer:
+        return session.reference_answer
+    answer_text = ""
+    for question in session.questions:
+        if question.answers:
+            answer_text = question.answers[0].text
+            break
+    if not answer_text:
+        raise RuntimeError("This session has no answer to reference.")
+    prompt = {
+        "topic": session.topic,
+        "stored_view": session.view_context[:6000],
+        "candidate_answer": answer_text[:4000],
+        "target_rubric": SCORE_RUBRIC,
+    }
+    llm = provider or default_provider()
+    raw = llm.complete(
+        [
+            {"role": "system", "content": (
+                "You are a demanding interview coach. Write one reference answer that would "
+                "score 7-8 on the rubric supplied in target_rubric for the given topic, using "
+                "the stored View as background. Speak it as if answering the question aloud in "
+                "150-200 words: bottom line first, one causal chain explained end to end, "
+                "evidence with magnitudes, and what would falsify the view. Do not invent facts "
+                "that neither the stored View nor general knowledge supports. Then, under the "
+                "heading 'What the strong version does differently', list exactly two or three "
+                "short structural differences from the candidate's answer (not word-level edits). "
+                "Return plain text only."
+            )},
+            {"role": "user", "content": json.dumps(prompt)},
+        ],
+        CompletionOptions(
+            model=session.model or interview_model(), max_tokens=650,
+            temperature=0.3, json_mode=False,
+        ),
+    )
+    text = raw.strip()
+    if not text:
+        raise RuntimeError("The interview model did not return a reference answer.")
+    session.reference_answer = text
+    save_session(session)
+    return text

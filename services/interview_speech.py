@@ -18,6 +18,37 @@ WORKER_FILE = Path(__file__).resolve().parent / "interview_speech_worker.py"
 MAX_AUDIO_BYTES = 40 * 1024 * 1024
 _ROUTES_REGISTERED = False
 
+# Standing macro/quant vocabulary used to bias local transcription. Whisper's
+# initial_prompt conditions decoding on a short text passage, so terms spoken in
+# an answer are far more likely to be transcribed correctly when they appear
+# here. Keep this list small and concrete; the prompt has a hard character cap.
+STT_GLOSSARY = (
+    "term premium, hyperscaler, capex, basis points, HY, IG, BB/BBB, r>g, "
+    "breakeven, duration, carry, spread, dispersion, AI data centers, HBM"
+)
+BIAS_CONTEXT_LIMIT = 500
+
+
+def speech_bias_context(topic: str = "", view_context: str = "") -> str:
+    """Assemble the short vocabulary prompt handed to whisper.
+
+    Priority is the standing glossary, then the topic, then a trim of the stored
+    View. The browser's live-caption preview is deliberately excluded: feeding a
+    misheard transcript back in as a prompt would anchor the same error.
+    """
+    parts = [f"Macro and quantitative finance vocabulary: {STT_GLOSSARY}."]
+    topic = " ".join((topic or "").split())
+    if topic:
+        parts.append(f"Topic: {topic}.")
+    remaining = BIAS_CONTEXT_LIMIT - len(" ".join(parts)) - 1
+    view_context = " ".join((view_context or "").split())
+    if view_context and remaining > 40:
+        excerpt = view_context[:remaining]
+        if len(view_context) > remaining:
+            excerpt = excerpt.rsplit(" ", 1)[0]
+        parts.append(f"Context: {excerpt}")
+    return " ".join(parts)[:BIAS_CONTEXT_LIMIT]
+
 
 def _env(name: str, default: str) -> str:
     return (os.environ.get(name) or default).strip()
@@ -71,8 +102,13 @@ def _run_worker(
     return data
 
 
+def speech_runtime_available() -> bool:
+    """True once the isolated faster-whisper runtime has been installed."""
+    return (RUNTIME_DIR / "numpy" / "__init__.py").exists()
+
+
 def transcribe_file(path: Path, language: str = "en", context: str = "") -> dict:
-    if not (RUNTIME_DIR / "numpy" / "__init__.py").exists():
+    if not speech_runtime_available():
         raise RuntimeError(
             "The isolated speech runtime is missing. Run: "
             "conda run -n mqledger python setup_speech_runtime.py"

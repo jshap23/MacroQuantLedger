@@ -19,6 +19,13 @@ OPENCODE_GO_BASE_URL_DEFAULT = "https://opencode.ai/zen/go/v1"
 # Default model ID on OpenCode Go; override with OPENCODE_MODEL or per-task env vars
 OPENCODE_GO_MODEL_DEFAULT = "deepseek-v4.1-flash"
 
+# Default grader for scored View practice (Deliver / Discuss / Defend). This is
+# only a default selection — the model stays user-selectable per session so a
+# more thoughtful model can be chosen on demand. Bump these (or set
+# INTERVIEW_GRADER_MODEL) when the preferred grader changes.
+INTERVIEW_GRADER_MODEL_OPENROUTER_DEFAULT = "z-ai/glm-5.3"
+INTERVIEW_GRADER_MODEL_OPENCODE_GO_DEFAULT = "glm-5.3"
+
 # Provider selection constants
 LLM_PROVIDER_OPENROUTER = "openrouter"
 LLM_PROVIDER_OPENCODE_GO = "opencode_go"

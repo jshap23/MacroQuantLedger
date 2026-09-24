@@ -3,29 +3,34 @@ from __future__ import annotations
 
 import random
 from collections import deque
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from nicegui import run, ui
 
 from services.interview_controller import (
-    abandon_session, advance_session, answer_tips, evaluate_answer, start_session,
+    abandon_session, advance_session, answer_tips, evaluate_answer, reference_answer,
+    rubric_band_for, start_session,
 )
-from services.interview_llm import available as llm_available, interview_model, selectable_models
+from services.interview_llm import (
+    available as llm_available, grader_model, interview_model, selectable_models,
+)
 from services.interview_prompts import (
     PRESETS, PROMPT_PACK_VERSION, QUANT_FUNDAMENTALS_OPENERS,
     built_in_prompt, get_preset,
 )
 from components.interview_speech import (
     cancel_recording, replay_recording, start_recording, stop_recording,
+    transcribe_recording,
 )
 from components.interview_tts import speak_question, stop_speaking
 from components.status_bar import days_since, staleness_color, staleness_label
 from storage.interview_store import (
-    load_database, model_practice_stats, performance_summary,
-    preferred_model, save_preferred_model, view_practice_queue,
+    load_database, model_practice_stats, performance_summary, practice_pulse,
+    preferred_model, recent_answers, save_preferred_model, view_practice_queue,
     view_practice_stats, view_refresh_target,
 )
+from storage.interview_store import gone_quiet_tags as _not_flagged_tags
 from storage.model_library import (
     ModelNote, find_comparison_note, model_context_for, models_folder_path,
     scan_model_notes,
@@ -35,6 +40,7 @@ from storage.user_settings import (
     save_interview_tts_model,
 )
 import config as app_config
+from services.interview_speech import speech_bias_context, speech_runtime_available
 from services.topic_views import views_context
 from storage.persistence import load_state, save_state
 
@@ -142,6 +148,10 @@ def _inject_css() -> None:
         .interview-answer textarea { min-height:150px !important; line-height:1.55 !important; }
         .interview-feedback { border-left:3px solid var(--accent); padding:0.7rem 1rem; margin:1rem 0; }
         .interview-list-item { color:var(--text-muted); font-size:0.78rem; padding:0.2rem 0; }
+        .pm-body { color:var(--text-primary); font-size:15px; line-height:1.6; padding:0.2rem 0; }
+        .pm-col { max-width:68ch; }
+        .pm-cleared { color:#34d399; }
+        body.light-mode .pm-cleared { color:#15803d; }
         .interview-recording-panel {
             margin-top:0.7rem; padding:0.75rem; border:1px solid var(--border);
             border-radius:6px; background:var(--bg-input);
@@ -307,6 +317,7 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
         "tts_enabled": interview_tts_enabled(),
         "tts_model": interview_tts_model(),
         "last_tts_question": None,
+        "reference_open": None,
     }
     root = ui.element("div").classes("interview-shell")
 
@@ -331,52 +342,49 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
             state.update(session=None, pending=None, retrying=False, view_setup={"ids": list(view_ids), "style": style})
             refresh()
 
-        def show_surprise_setup(view) -> None:
-            state.update(
-                session=None, pending=None, retrying=False,
-                models_setup=None,
-                view_setup={"ids": [view.id], "style": "Deliver", "surprise": True},
-            )
-            refresh()
-
         async def start_surprise_views() -> None:
-            active = [
-                view for view in (app_state.topic_views if app_state else [])
-                if not view.archived
-            ]
-            if not active:
-                state.update(
-                    session=None, pending=None, retrying=False,
-                    models_setup=None, view_setup=None,
-                )
-                refresh()
-                return
-            selected = _pick_recent(active, "views")
-            if not llm_available():
-                show_surprise_setup(selected)
-                return
-            preset = get_preset("view_deliver")
-            chosen_model = preferred_model() or interview_model()
-            save_preferred_model(chosen_model)
-            try:
-                session = await run.io_bound(lambda: start_session(
-                    mode=preset.mode, preset_key=preset.key,
-                    topic=selected.name,
-                    materials="", view_ids=[selected.id],
-                    practice_style="Deliver", view_context=views_context([selected]),
-                    initial_question=f"What's your view on {selected.name}?",
-                    target_questions=preset.default_questions,
-                    model=chosen_model,
-                ))
-            except Exception:
-                show_surprise_setup(selected)
-                return
-            state.update(session=session, pending=None, retrying=False, view_setup=None)
-            refresh()
+            await _start_view_surprise(state, refresh, app_state)
 
         launch_bridge["open"] = open_views
         launch_bridge["surprise"] = start_surprise_views
     refresh()
+
+
+def _cold_topics(app_state, days: int = 14, limit: int = 2) -> list[str]:
+    """Active Views last practiced more than ``days`` ago, coldest first."""
+    if app_state is None:
+        return []
+    now = datetime.now(timezone.utc)
+    cold: list[tuple[datetime, str]] = []
+    for view in app_state.topic_views:
+        if view.archived or view.practice.last_practiced is None:
+            continue
+        last = view.practice.last_practiced
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if (now - last).days > days:
+            cold.append((last, view.name))
+    cold.sort()
+    return [name for _, name in cold[:limit]]
+
+
+def _render_practice_pulse(app_state) -> None:
+    """One dimmed, forward-looking line; omits empty signals and all-empty."""
+    pulse = practice_pulse()
+    segments: list[str] = []
+    if pulse["most_persistent"]:
+        segments.append(f"Most persistent: {pulse['most_persistent']}")
+    if pulse["reps_this_week"]:
+        segments.append(f"{pulse['reps_this_week']} reps this week")
+    if pulse["not_flagged"]:
+        segments.append("Not flagged lately: " + ", ".join(pulse["not_flagged"][:2]))
+    cold = _cold_topics(app_state)
+    if cold:
+        segments.append("Cold 14+ days: " + ", ".join(cold))
+    if segments:
+        ui.label(" · ".join(segments)).classes("interview-meta").style(
+            "margin:0.1rem 0 0.6rem;"
+        )
 
 
 def _render_home(state: dict, refresh, app_state=None) -> None:
@@ -392,6 +400,8 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
             "Surprise Me (Views)" if active_views else "Start Practicing",
             icon="shuffle" if active_views else "psychology",
         ).classes("submit-btn")
+
+    _render_practice_pulse(app_state)
 
     def weakness_setup() -> None:
         state["weakness_setup"] = True
@@ -457,6 +467,119 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
     _render_performance(summary)
 
 
+async def _launch_quant_fundamentals(
+    state: dict, refresh, *, button=None, status=None,
+    button_label: str = "Quant Fundamentals",
+) -> None:
+    if not llm_available():
+        if status is not None:
+            status.set_text("Configure an LLM provider and API key in Settings, then restart the app.")
+        return
+    if button is not None:
+        button.disable()
+        button.set_text("Preparing first question…")
+    preset = get_preset("quant_drill")
+    chosen_model = preferred_model() or interview_model()
+    save_preferred_model(chosen_model)
+    try:
+        session = await run.io_bound(lambda: start_session(
+            mode=preset.mode, preset_key=preset.key,
+            topic="Quant fundamentals",
+            initial_question=random.choice(QUANT_FUNDAMENTALS_OPENERS),
+            practice_style="Fundamentals",
+            target_questions=preset.default_questions,
+            model=chosen_model,
+        ))
+    except Exception as exc:
+        if status is not None:
+            status.set_text(f"Could not start: {exc}")
+        if button is not None:
+            button.enable()
+            button.set_text(button_label)
+        return
+    state.update(session=session, pending=None, retrying=False, models_setup=None)
+    refresh()
+
+
+async def _launch_quant_surprise(
+    state: dict, refresh, *, button=None, status=None,
+    button_label: str = "Surprise Me (Quant)",
+) -> None:
+    """Pick a random model note and mode, or fall back to Quant Fundamentals."""
+    notes = scan_model_notes()
+    if not notes:
+        await _launch_quant_fundamentals(
+            state, refresh, button=button, status=status, button_label=button_label,
+        )
+        return
+    note = _pick_recent(notes, "quant_notes")
+    mode = random.choice(_MODEL_ROW_MODES)
+    preset = get_preset(f"model_{mode}")
+    await _start_model_session(
+        state, refresh,
+        preset_key=preset.key, topic=note.title,
+        initial_question=_model_opener(mode, note.title),
+        notes=[note], style=_MODEL_MODE_LABELS[mode],
+        target_questions=preset.default_questions,
+        button=button, status=status, button_label=button_label,
+        surprise=True,
+    )
+
+
+async def _start_view_surprise(
+    state: dict, refresh, app_state=None, *,
+    button=None, button_label: str = "Surprise Again",
+) -> None:
+    """Pick a random active My View and start a Deliver session on it."""
+    active = [
+        view for view in (app_state.topic_views if app_state else [])
+        if not view.archived
+    ]
+    if not active:
+        state.update(
+            session=None, pending=None, retrying=False,
+            models_setup=None, view_setup=None,
+        )
+        refresh()
+        return
+    selected = _pick_recent(active, "views")
+    if not llm_available():
+        state.update(
+            session=None, pending=None, retrying=False, models_setup=None,
+            view_setup={"ids": [selected.id], "style": "Deliver", "surprise": True},
+        )
+        refresh()
+        return
+    preset = get_preset("view_deliver")
+    chosen_model = preferred_model() or grader_model()
+    save_preferred_model(chosen_model)
+    if button is not None:
+        button.disable()
+        button.set_text("Preparing…")
+    try:
+        session = await run.io_bound(lambda: start_session(
+            mode=preset.mode, preset_key=preset.key,
+            topic=selected.name,
+            materials="", view_ids=[selected.id],
+            practice_style="Deliver", view_context=views_context([selected]),
+            initial_question=f"What's your view on {selected.name}?",
+            target_questions=preset.default_questions,
+            model=chosen_model, surprise=True,
+        ))
+    except Exception:
+        if button is not None:
+            button.enable()
+            button.set_text(button_label)
+        state.update(
+            session=None, pending=None, retrying=False, models_setup=None,
+            view_setup={"ids": [selected.id], "style": "Deliver", "surprise": True},
+        )
+        refresh()
+        return
+    state.update(session=session, pending=None, retrying=False, view_setup=None)
+    refresh()
+
+
 def _render_quant_practice_card(state: dict, refresh) -> None:
     notes = scan_model_notes()
     status_text = _library_status_text(models_folder_path(), notes)
@@ -468,45 +591,13 @@ def _render_quant_practice_card(state: dict, refresh) -> None:
         refresh()
 
     async def start_fundamentals() -> None:
-        if not llm_available():
-            status.set_text("Configure an LLM provider and API key in Settings, then restart the app.")
-            return
-        fundamentals_btn.disable()
-        fundamentals_btn.set_text("Preparing first question…")
-        preset = get_preset("quant_drill")
-        chosen_model = preferred_model() or interview_model()
-        save_preferred_model(chosen_model)
-        try:
-            session = await run.io_bound(lambda: start_session(
-                mode=preset.mode, preset_key=preset.key,
-                topic="Quant fundamentals",
-                initial_question=random.choice(QUANT_FUNDAMENTALS_OPENERS),
-                practice_style="Fundamentals",
-                target_questions=preset.default_questions,
-                model=chosen_model,
-            ))
-        except Exception as exc:
-            status.set_text(f"Could not start: {exc}")
-            fundamentals_btn.enable()
-            fundamentals_btn.set_text("Quant Fundamentals")
-            return
-        state.update(session=session, pending=None, retrying=False)
-        refresh()
+        await _launch_quant_fundamentals(
+            state, refresh, button=fundamentals_btn, status=status,
+        )
 
     async def surprise_quant() -> None:
-        if not notes:
-            await start_fundamentals()
-            return
-        note = _pick_recent(notes, "quant_notes")
-        mode = random.choice(_MODEL_ROW_MODES)
-        preset = get_preset(f"model_{mode}")
-        await _start_model_session(
-            state, refresh,
-            preset_key=preset.key, topic=note.title,
-            initial_question=_model_opener(mode, note.title),
-            notes=[note], style=_MODEL_MODE_LABELS[mode],
-            target_questions=preset.default_questions,
-            button=surprise_btn, status=status, button_label="Surprise Me (Quant)",
+        await _launch_quant_surprise(
+            state, refresh, button=surprise_btn, status=status,
         )
 
     with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
@@ -543,7 +634,7 @@ def _render_quant_practice_card(state: dict, refresh) -> None:
 async def _start_model_session(
     state: dict, refresh, *, preset_key: str, topic: str, initial_question: str,
     notes: list[ModelNote], style: str, target_questions: int,
-    button=None, status=None, button_label: str = "Start",
+    button=None, status=None, button_label: str = "Start", surprise: bool = False,
 ) -> None:
     if not llm_available():
         if status is not None:
@@ -564,6 +655,7 @@ async def _start_model_session(
             practice_style=style,
             target_questions=target_questions,
             model=chosen_model,
+            surprise=surprise,
         ))
     except Exception as exc:
         if status is not None:
@@ -722,6 +814,19 @@ def _session_count(count: int) -> str:
     return f"{count} session{'s' if count != 1 else ''}"
 
 
+_RUBRIC_MIN_REPS = 10
+
+
+def _rubric_reps() -> int:
+    """Completed View sessions scored under the current prompt/rubric version."""
+    return sum(
+        1 for session in load_database().sessions
+        if session.status == "completed"
+        and session.prompt_pack_version == PROMPT_PACK_VERSION
+        and session.view_ids
+    )
+
+
 _REFRESH_TARGETS = (
     ("Core", "weekly"),
     ("Normal", "3 weeks"),
@@ -773,8 +878,13 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
         return
     stats_by_view = view_practice_stats()
     queue = view_practice_queue(active)
+    # Latest/best are point-in-time values; movement (delta and sparkline) is
+    # suppressed until enough reps exist under the anchored rubric to be real.
+    show_movement = _rubric_reps() >= _RUBRIC_MIN_REPS
 
     def trend_html(entry: dict) -> str:
+        if not show_movement:
+            return '<span class="ghostline"></span>'
         series = (stats_by_view.get(entry["view"].id) or {}).get("series") or []
         if not series:
             return '<span class="ghostline"></span>'
@@ -840,11 +950,14 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
                 else:
                     score = ui.html(_fmt_stat(latest["score"]), tag="span").classes("score")
                 if best is not None and latest["score"] != best["score"]:
-                    score.tooltip(
-                        f'best {_fmt_stat(best["score"])} · {_fmt_stat(abs(stats["delta_vs_best"]))} below'
-                    )
+                    if show_movement:
+                        score.tooltip(
+                            f'best {_fmt_stat(best["score"])} · {_fmt_stat(abs(stats["delta_vs_best"]))} below'
+                        )
+                    else:
+                        score.tooltip(f'best {_fmt_stat(best["score"])}')
 
-            delta = stats.get("delta_vs_prev")
+            delta = stats.get("delta_vs_prev") if show_movement else None
             if delta and delta > 0:
                 ui.label(f"▲+{_fmt_stat(delta)}").classes("delta").style("color:#4ade80")
             elif delta and delta < 0:
@@ -966,16 +1079,20 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
         ).classes("interview-meta")
         if style == "Deliver" and len(views) > 1:
             ui.label("Mixed Deliver sessions move between selected Views; each answer is evaluated semantically, not word-for-word.").classes("interview-meta")
-        default_model = preferred_model() or interview_model()
+        default_model = preferred_model() or grader_model()
         model = ui.select(
             list(dict.fromkeys([default_model, *selectable_models()])),
-            value=default_model, label="AI Model",
+            value=default_model, label="Grader model",
         ).classes("dark-input").style("min-width:260px;margin-top:.6rem")
+        ui.label(
+            "Default grader for scored practice. Change it for a more thoughtful run — "
+            "scores are only tracked within a single model."
+        ).classes("interview-meta").style("margin-top:0.2rem;")
         status = ui.label("").style("color:#f87171;font-size:.75rem;min-height:1rem;margin-top:.6rem")
         async def start():
             if not llm_available(): status.set_text("Configure an LLM provider and API key in Settings, then restart the app."); return
             button.disable(); button.set_text("Preparing…")
-            chosen_model = model.value or interview_model()
+            chosen_model = model.value or grader_model()
             save_preferred_model(chosen_model)
             try:
                 session = await run.io_bound(lambda: start_session(
@@ -988,6 +1105,7 @@ def _render_view_setup(state: dict, refresh, app_state) -> None:
                     ),
                     target_questions=(len(views) if style == "Deliver" else preset.default_questions),
                     model=chosen_model,
+                    surprise=bool(setup.get("surprise")),
                 ))
             except Exception as exc:
                 status.set_text(f"Could not start: {exc}"); button.enable(); button.set_text("Begin"); return
@@ -1237,6 +1355,11 @@ def _render_session(session, state: dict, refresh) -> None:
         voice_active = {"value": False}
         submitting = {"value": False}
         tips_loading = {"value": False}
+        # Set when speech-derived text lands in the draft, so the grader can be
+        # told the answer is a raw transcript. turn_token invalidates a local
+        # transcription that arrives after the turn has already moved on.
+        voice_origin = {"value": False}
+        turn_token = {"value": 0}
 
         def combined(base: str, text: str) -> str:
             return f"{base.strip()} {text.strip()}".strip()
@@ -1250,6 +1373,7 @@ def _render_session(session, state: dict, refresh) -> None:
             base = (answer.value or "").strip()
             full = combined(base, text)
             voice_draft.update(base=base, draft=text.strip(), full=full)
+            voice_origin["value"] = True
             answer.set_value(full)
 
         def set_idle(record_more: bool = False) -> None:
@@ -1265,6 +1389,7 @@ def _render_session(session, state: dict, refresh) -> None:
         def handle_transcription(result: dict) -> None:
             if result.get("ok"):
                 improved = str(result.get("text") or "").strip()
+                voice_origin["value"] = True
                 current = (answer.value or "").strip()
                 if voice_draft["full"] and current == voice_draft["full"]:
                     answer.set_value(combined(voice_draft["base"], improved))
@@ -1321,6 +1446,32 @@ def _render_session(session, state: dict, refresh) -> None:
             cancel_voice_btn.visible = True
             cancel_voice_btn.set_text("Cancel")
 
+        async def transcribe_voice() -> None:
+            """Replace the live-caption draft with a vocabulary-biased transcript.
+
+            Runs only after the caption preview is already usable, so the
+            candidate is never blocked; a failure leaves the caption draft in
+            place and keeps the audio retryable.
+            """
+            token = turn_token["value"]
+            if not speech_runtime_available():
+                # No isolated whisper runtime: keep the caption draft and the
+                # previous behaviour instead of surfacing a setup error.
+                recording_status.set_text(
+                    "Live draft ready · review before submitting"
+                )
+                return
+            recording_status.set_text("Transcribing locally with domain vocabulary…")
+            try:
+                result = await transcribe_recording(
+                    speech_bias_context(session.topic, session.view_context)
+                )
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc), "retryable": True}
+            if token != turn_token["value"] or submitting["value"]:
+                return
+            handle_transcription(result)
+
         async def finish_voice() -> None:
             if not voice_active["value"]:
                 return
@@ -1338,7 +1489,7 @@ def _render_session(session, state: dict, refresh) -> None:
                     insert_live_draft(preview)
                     live_caption.set_text("")
                     recording_status.set_text(
-                        "Live draft inserted · review it or improve with local transcription"
+                        "Live draft inserted · refining transcript locally…"
                     )
                 else:
                     recording_status.set_text(
@@ -1352,13 +1503,19 @@ def _render_session(session, state: dict, refresh) -> None:
                 cancel_voice_btn.set_text("Discard Audio")
                 replay_btn.visible = True
                 submit_btn.enable()
+                # Re-enable discard before waiting on transcription; the
+                # turn_token guard makes a mid-transcription discard safe.
+                cancel_voice_btn.enable()
+                await transcribe_voice()
             else:
                 handle_transcription(result)
             cancel_voice_btn.enable()
 
         async def discard_voice() -> None:
+            turn_token["value"] += 1
             await cancel_recording()
             voice_active["value"] = False
+            voice_origin["value"] = False
             fallback_preview["text"] = ""
             use_preview_btn.visible = False
             recording_status.set_text("Recording discarded")
@@ -1368,6 +1525,7 @@ def _render_session(session, state: dict, refresh) -> None:
         def use_preview() -> None:
             if fallback_preview["text"]:
                 append_transcript(fallback_preview["text"])
+                voice_origin["value"] = True
                 use_preview_btn.visible = False
                 recording_status.set_text("Live captions inserted · audio remains available")
             submit_btn.enable()
@@ -1393,12 +1551,14 @@ def _render_session(session, state: dict, refresh) -> None:
                 error.set_text("Answer the question, or say plainly that you do not know.")
                 return
             submitting["value"] = True
+            turn_token["value"] += 1
+            voice_answer = voice_origin["value"]
             submit_btn.disable()
             mic.disable()
             submit_btn.set_text("Evaluating…" if session.mode == "Drill" else "Continuing…")
             try:
                 updated, result = await run.io_bound(lambda: evaluate_answer(
-                    session.id, text, is_retry=state["retrying"],
+                    session.id, text, is_retry=state["retrying"], voice_origin=voice_answer,
                 ))
                 state["session"] = updated
                 if result["done"]:
@@ -1500,7 +1660,7 @@ def _render_drill_feedback(session, result: dict, state: dict, refresh) -> None:
         ui.label(f"SCORE  {score if score is not None else '—'} / 10").style("font-weight:700; color:var(--text-primary);")
         with ui.element("div").style("margin:0.4rem 0;"):
             for tag in result.get("failure_tags", []):
-                ui.element("span").classes("interview-tag").text = tag
+                ui.label(tag).classes("interview-tag")
         ui.label(result.get("critique") or "No material failure identified.").style(
             "color:var(--text-muted); font-size:0.82rem; line-height:1.55; white-space:pre-wrap;"
         )
@@ -1543,7 +1703,45 @@ def _render_drill_feedback(session, result: dict, state: dict, refresh) -> None:
     ui.keyboard(handle_shortcut, repeating=False, ignore=[])
 
 
+def _render_score_band(session) -> None:
+    """Show the session score as its rubric band, never the raw 1-10 integer.
+
+    Only sessions graded under the current rubric version show a band; older
+    sessions render as before, with no band line. The score is the session
+    average of graded answers (round half up), so a multi-question session is
+    represented as a whole.
+    """
+    if session.prompt_pack_version != PROMPT_PACK_VERSION:
+        return
+    scores = [
+        answer.score
+        for question in session.questions
+        for answer in question.answers
+        if answer.score is not None
+    ]
+    if not scores:
+        return
+    average = sum(scores) / len(scores)
+    band = rubric_band_for(int(average + 0.5))
+    if band is None:
+        return
+    label, descriptor, next_descriptor = band
+    ui.label(f"Band {label.replace('-', '–')} · {descriptor}").classes("pm-body").style(
+        "font-weight:600; margin-top:0.55rem;"
+    )
+    if next_descriptor:
+        ui.label(f"Next band: {next_descriptor}").classes("pm-body").style(
+            "color:var(--text-muted);"
+        )
+
+
 def _render_postmortem(session, state: dict, refresh) -> None:
+    """Results screen: a single ~68ch reading column."""
+    with ui.element("div").classes("pm-col"):
+        _render_postmortem_inner(session, state, refresh)
+
+
+def _render_postmortem_inner(session, state: dict, refresh) -> None:
     post = session.postmortem
     preset = get_preset(session.preset_key, session.mode)
     ui.label("SESSION COMPLETE").classes("interview-kicker")
@@ -1552,6 +1750,7 @@ def _render_postmortem(session, state: dict, refresh) -> None:
         if preset.key not in {"maintenance_20", "weaknesses"}:
             ui.label("OVERALL").classes("section-header")
             ui.label(post.overall_performance if post else "Session completed.").style("line-height:1.6;")
+            _render_score_band(session)
         if post:
             if preset.key == "view_deliver":
                 _postmortem_list("COVERED", post.strongest_areas)
@@ -1578,16 +1777,35 @@ def _render_postmortem(session, state: dict, refresh) -> None:
                 for category in ("knowledge", "evidence/research", "reasoning", "communication", "pressure handling"):
                     detail = post.root_causes.get(category, "")
                     if detail:
-                        ui.label(f"{category.upper()} — {detail}").classes("interview-list-item")
-            if post.trend:
-                ui.label("TREND").classes("section-header").style("margin-top:1rem;")
-                ui.label(post.trend).classes("interview-list-item")
+                        ui.label(f"{category.upper()} — {detail}").classes("pm-body")
+        _render_tag_history(session)
 
     def new_session() -> None:
         state.update(
             session=None, pending=None, retrying=False,
-            weakness_setup=False, selected_preset=None,
+            weakness_setup=False, selected_preset=None, reference_open=None,
         )
+        refresh()
+
+    ref_open = state.get("reference_open") == session.id
+
+    async def toggle_reference() -> None:
+        """Fetch (once) and reveal a model 7-8 answer. Never shown unprompted."""
+        if state.get("reference_open") == session.id:
+            state["reference_open"] = None
+            refresh()
+            return
+        ref_btn.disable()
+        ref_btn.set_text("Writing…")
+        try:
+            text = await run.io_bound(lambda: reference_answer(session.id))
+        except Exception as exc:
+            ui.notify(f"Could not load a reference answer: {exc}", type="negative")
+            ref_btn.enable()
+            ref_btn.set_text("Show a strong version")
+            return
+        session.reference_answer = text
+        state["reference_open"] = session.id
         refresh()
 
     with ui.row().style("gap:.55rem;flex-wrap:wrap"):
@@ -1597,7 +1815,21 @@ def _render_postmortem(session, state: dict, refresh) -> None:
                 ui.button("Practice Defense", on_click=lambda: (state.update(session=None, pending=None, retrying=False, view_setup={"ids": session.view_ids, "style": "Defend"}), refresh())).classes("cancel-btn")
             if state.get("review_view") and len(session.view_ids) == 1:
                 ui.button("Review This View", icon="edit_note", on_click=lambda: state["review_view"](session.view_ids[0])).classes("cancel-btn")
+            ref_btn = ui.button(
+                "Hide strong version" if ref_open else "Show a strong version",
+                icon="auto_awesome", on_click=toggle_reference,
+            ).classes("cancel-btn")
         ui.button("Start Another Session", on_click=new_session).classes("cancel-btn" if session.view_ids else "submit-btn")
+        if session.surprise and session.view_ids:
+            surprise_again_btn = ui.button("Surprise Again", icon="shuffle").classes("cancel-btn")
+
+            async def surprise_again_views() -> None:
+                await _start_view_surprise(
+                    state, refresh, state.get("app_state"),
+                    button=surprise_again_btn, button_label="Surprise Again",
+                )
+
+            surprise_again_btn.on("click", surprise_again_views)
 
     if session.model_note_ids:
         mode = _MODEL_PRESET_MODES.get(session.preset_key, "")
@@ -1667,6 +1899,28 @@ def _render_postmortem(session, state: dict, refresh) -> None:
 
                         switch_btn.on("click", switch_mode)
 
+                if session.surprise:
+                    surprise_again_btn = ui.button("Surprise Again", icon="shuffle").classes("cancel-btn")
+
+                    async def surprise_again_quant() -> None:
+                        await _launch_quant_surprise(
+                            state, refresh, button=surprise_again_btn, status=pm_status,
+                            button_label="Surprise Again",
+                        )
+
+                    surprise_again_btn.on("click", surprise_again_quant)
+
+    if ref_open and session.reference_answer:
+        with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
+            ui.label("A STRONG VERSION · 7-8 ON THE RUBRIC").classes("interview-kicker")
+            ui.label(session.reference_answer).classes("pm-body").style(
+                "white-space:pre-wrap;margin-top:.4rem;"
+            )
+            ui.label(
+                "A model answer, shown only because you asked. Reading it ends the "
+                "retrieval practice for this rep."
+            ).classes("interview-meta").style("margin-top:.45rem;")
+
 
 def _sync_view_metadata(app_state, view_ids: list[str]) -> None:
     """Reflect controller-persisted practice metadata without forcing a page reload."""
@@ -1679,12 +1933,56 @@ def _sync_view_metadata(app_state, view_ids: list[str]) -> None:
             view.practice = by_id[view.id].practice
 
 
+def _render_tag_history(session) -> None:
+    """Surface this rep's failure tags and their recent history.
+
+    Tags are a more stable progress signal than the unanchored score, so they
+    are shown for every completed session rather than only in Drill. A rep is
+    one answer; the most recent answer is the rep just completed. Counts cover
+    the last ten reps; a direction clause is added only once twenty reps exist,
+    so a trend is never fabricated from thin history.
+    """
+    reps = recent_answers(
+        practice_style=session.practice_style or None,
+        preset_key=session.preset_key or None,
+        limit=20,
+    )
+    if not reps:
+        return
+    current_tags = list(reps[0]["failure_tags"])[:3]
+    not_flagged = _not_flagged_tags(reps)
+    if not current_tags and not not_flagged:
+        return
+
+    ui.label("FAILURE TAGS").classes("section-header").style("margin-top:1rem;")
+    if current_tags:
+        with ui.element("div").style("margin:0.3rem 0 0.45rem;"):
+            for tag in current_tags:
+                ui.label(tag).classes("interview-tag")
+
+    style = f" {session.practice_style}" if session.practice_style else ""
+    window = reps[:10]
+    prior = reps[10:20]
+    for tag in current_tags:
+        count = sum(1 for rep in window if tag in rep["failure_tags"])
+        line = f"{tag} — {count} of your last {len(window)}{style} reps"
+        if len(reps) >= 20:
+            before = sum(1 for rep in prior if tag in rep["failure_tags"])
+            if before > count:
+                line = f"{tag} — {count} of last 10, down from {before} of 10 before"
+            elif before < count:
+                line = f"{tag} — {count} of last 10, up from {before} of 10 before"
+        ui.label(line).classes("pm-body")
+    for tag, streak in not_flagged:
+        ui.label(f"{tag} — not flagged in last {streak} reps").classes("pm-body pm-cleared")
+
+
 def _postmortem_list(title: str, items: list[str]) -> None:
     if not items:
         return
     ui.label(title).classes("section-header").style("margin-top:1rem;")
     for item in items:
-        ui.label(f"• {item}").classes("interview-list-item")
+        ui.label(f"• {item}").classes("pm-body")
 
 
 def _render_performance(summary: dict) -> None:
