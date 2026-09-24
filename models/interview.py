@@ -64,8 +64,13 @@ class InterviewPostmortem(BaseModel):
     trend: str = ""
     # "ok" when overall text plus at least one item in each list is present;
     # "partial" when some but not all; "missing" when nothing usable came back.
-    # "" marks a legacy postmortem that never recorded a status.
+    # "" marks a legacy postmortem that never recorded a status. "pending" marks
+    # a completed session whose summary is written separately by
+    # synthesize_session().
     status: str = ""
+    # When status is "missing", which failure produced it: "provider" for a
+    # transport/auth failure, "output" when the model's content was unusable.
+    synthesis_error: str = ""
 
 
 class InterviewSession(BaseModel):

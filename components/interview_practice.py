@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import random
-from collections import deque
+from collections import Counter, deque
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from nicegui import run, ui
 
 from services.interview_controller import (
     abandon_session, advance_session, answer_tips, band_visible, evaluate_answer,
-    reference_answer, session_band, start_session,
+    reference_answer, session_band, session_stats, start_session, synthesize_session,
 )
 from services.interview_llm import (
     InterviewOutputError, InterviewProviderError,
@@ -341,6 +341,7 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
         "tts_model": interview_tts_model(),
         "last_tts_question": None,
         "reference_open": None,
+        "synthesizing": set(),
     }
     root = ui.element("div").classes("interview-shell")
 
@@ -1614,6 +1615,7 @@ def _render_session(session, state: dict, refresh) -> None:
                 if result["done"]:
                     state["pending"] = None
                     _sync_view_metadata(state.get("app_state"), updated.view_ids)
+                    state["synthesizing"].add(updated.id)
                 elif session.mode == "Drill":
                     state["pending"] = result
                 else:
@@ -1621,6 +1623,10 @@ def _render_session(session, state: dict, refresh) -> None:
                 await stop_speaking()
                 await cancel_recording()
                 refresh()
+                if result["done"]:
+                    # The postmortem is already on screen with "Writing summary…";
+                    # the review is a separate call, run like any other model call.
+                    await _run_synthesis(state, updated.id, refresh)
             except InterviewProviderError:
                 # Transport/auth/rate-limit failure: the answer was never
                 # evaluated, so it stays in the box for a retry.
@@ -1867,6 +1873,7 @@ def _render_postmortem_inner(session, state: dict, refresh) -> None:
     show_overall = preset.key not in {"maintenance_20", "weaknesses"}
     ui.label("SESSION COMPLETE").classes("interview-kicker")
     ui.label(f"{preset.label} · {session.topic} · {len(session.questions)} questions").classes("interview-meta")
+    running = session.id in state.get("synthesizing", set())
     with ui.element("div").classes("interview-card").style("margin-top:0.8rem;"):
         if status == "partial":
             ui.label("PARTIAL SUMMARY").classes("pm-warn").style(
@@ -1878,10 +1885,21 @@ def _render_postmortem_inner(session, state: dict, refresh) -> None:
                 ui.label("OVERALL").classes("section-header")
                 ui.label(post.overall_performance if post else "Session completed.").style("line-height:1.6;")
                 _render_score_band(session)
-        elif status == "missing":
+        elif status == "pending" and running:
+            ui.label("Writing summary…").classes("pm-body").style("line-height:1.6;")
+        elif status == "pending":
             ui.label(
-                "Summary unavailable — the model didn't return a usable review. "
-                "Per-answer feedback is below."
+                "Summary not written yet — the review was interrupted. "
+                "Press Retry summary to write it now."
+            ).classes("pm-warn").style("line-height:1.6;")
+        elif status == "missing":
+            detail = (
+                "the model provider failed (network, key, or rate limit)"
+                if post and post.synthesis_error == "provider"
+                else "the model didn't return a usable review"
+            )
+            ui.label(
+                f"Summary unavailable — {detail}. Per-answer feedback is below."
             ).classes("pm-warn").style("line-height:1.6;")
         else:
             if show_overall:
@@ -1917,6 +1935,16 @@ def _render_postmortem_inner(session, state: dict, refresh) -> None:
                     if detail:
                         ui.label(f"{category.upper()} — {detail}").classes("pm-body")
         if not legacy:
+            _render_summary_stats(session)
+            if status in {"pending", "missing", "partial"} and not running:
+                async def retry_summary() -> None:
+                    state["synthesizing"].add(session.id)
+                    refresh()
+                    await _run_synthesis(state, session.id, refresh)
+
+                ui.button("Retry summary", icon="refresh", on_click=retry_summary).classes(
+                    "cancel-btn"
+                ).style("margin-top:0.7rem;")
             _render_answer_feedback(session)
         _render_tag_history(session)
 
@@ -2062,6 +2090,23 @@ def _render_postmortem_inner(session, state: dict, refresh) -> None:
             ).classes("interview-meta").style("margin-top:.45rem;")
 
 
+async def _run_synthesis(state: dict, session_id: str, refresh) -> None:
+    """Run the whole-interview review off the UI thread, then refresh.
+
+    ``synthesize_session`` records provider and output failures on the session
+    itself and never raises; the guard here only stops an unexpected error from
+    leaving the screen stuck on "Writing summary…".
+    """
+    try:
+        session = await run.io_bound(lambda: synthesize_session(session_id))
+        state["session"] = session
+    except Exception:
+        pass
+    finally:
+        state["synthesizing"].discard(session_id)
+        refresh()
+
+
 def _sync_view_metadata(app_state, view_ids: list[str]) -> None:
     """Reflect controller-persisted practice metadata without forcing a page reload."""
     if app_state is None or not view_ids:
@@ -2115,6 +2160,24 @@ def _render_tag_history(session) -> None:
         ui.label(line).classes("pm-body")
     for tag, streak in not_flagged:
         ui.label(f"{tag} — not flagged in last {streak} reps").classes("pm-body pm-cleared")
+
+
+def _render_summary_stats(session) -> None:
+    """One line of app-computed session numbers for the summary card.
+
+    Never the raw 1-10 average alone: coverage, the average of first attempts,
+    the rubric band, and the most frequent tags, all from ``session_stats()``.
+    """
+    stats = session_stats(session)
+    parts = [f"{stats['evaluated_count']} of {stats['first_attempt_count']} answers evaluated"]
+    if stats["mean_first_attempt_score"] is not None:
+        parts.append(f"average {stats['mean_first_attempt_score']:.1f}")
+    if stats["band"]:
+        parts.append(f"Band: {stats['band'].replace('-', '–')}")
+    frequent = [tag for tag, _ in Counter(stats["tag_counts"]).most_common(2)]
+    if frequent:
+        parts.append("most frequent: " + ", ".join(frequent))
+    ui.label(" · ".join(parts)).classes("interview-meta").style("margin-top:0.5rem;")
 
 
 def _postmortem_list(title: str, items: list[str]) -> None:

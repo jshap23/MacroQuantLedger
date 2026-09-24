@@ -13,23 +13,28 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from models.interview import (
     InterviewAnswer, InterviewDatabase, InterviewPostmortem, InterviewQuestion,
     InterviewSession,
 )
+from models.schema import TopicView, default_state
 from services import interview_controller as controller
 from services.interview_controller import (
     EVAL_MAX_TOKENS,
     FALLBACK_FOLLOW_UP,
     RUBRICS,
+    SYNTHESIS_MAX_TOKENS,
     _evaluation_schema,
     band_visible,
     evaluate_answer,
     rubric_bands,
     session_band,
+    session_stats,
     start_session,
+    synthesize_session,
 )
 from services.interview_llm import (
     CompletionOptions, InterviewOutputError, InterviewProviderError,
@@ -38,6 +43,7 @@ from services.interview_llm import (
 from services.interview_prompts import (
     LEGACY_V2_PROMPT_PACK, PRESETS, PROMPT_PACK_VERSION,
 )
+import storage.persistence as persistence
 from storage import interview_store as store
 from storage.interview_store import (
     InterviewHistoryUnreadable,
@@ -61,6 +67,38 @@ def _patch_history_file(path: Path) -> None:
 
 def _backups_for(path: Path) -> list[Path]:
     return sorted((path.parent / "backups").glob("interview_history_unreadable_*.json"))
+
+
+_STATE_HOLDER: dict = {}
+
+
+def _install_state_stub() -> None:
+    """Redirect View-metadata persistence to an in-memory state for the run.
+
+    The controller imports ``load_state``/``save_state`` at call time, so
+    replacing the module attributes keeps the live ``data/state.json`` untouched.
+    """
+    _STATE_HOLDER["json"] = default_state().model_dump_json()
+
+    def fake_load():
+        return persistence.AppState.model_validate_json(_STATE_HOLDER["json"])
+
+    def fake_save(state):
+        _STATE_HOLDER["json"] = state.model_dump_json()
+
+    persistence.load_state = fake_load
+    persistence.save_state = fake_save
+
+
+def _seed_view(view_id: str) -> None:
+    state = persistence.AppState.model_validate_json(_STATE_HOLDER["json"])
+    state.topic_views.append(TopicView(id=view_id, name="Test View"))
+    _STATE_HOLDER["json"] = state.model_dump_json()
+
+
+def _view_practice(view_id: str):
+    state = persistence.AppState.model_validate_json(_STATE_HOLDER["json"])
+    return next((view.practice for view in state.topic_views if view.id == view_id), None)
 
 
 def _legacy_payload() -> dict:
@@ -130,6 +168,7 @@ MARK_REVIEW_SCORES: list[int | None] = []
 def _install_controller_stubs() -> None:
     """Stub history-dependent context and spy on mark_review for the run."""
     controller.weakness_context = lambda: ""
+    _install_state_stub()
     real_mark_review = controller.mark_review
 
     def spy(question, score, tags, is_retry):
@@ -410,68 +449,23 @@ def test_model_done_flag_cannot_end_a_session_early() -> None:
     print("PASS: a model done flag cannot end a session early; questions_remaining is sent")
 
 
-def test_final_postmortem_aliases_map_and_mark_ok() -> None:
-    session = _new_session(target_questions=1)
-    provider = FakeProvider([_json({
-        "score": 7, "critique": "Bottom line was late.", "fix": "Lead with the view.",
-        "postmortem": {
-            "overall_performance": "Solid; would likely pass.",
-            "strengths": ["Clear mechanism"],
-            "weaknesses": ["Thin evidence"],
-            "next_steps": ["Add magnitudes"],
-        },
-    })])
-    updated, _ = evaluate_answer(session.id, "My answer.", provider=provider)
-    assert len(provider.calls) == 1
-    assert updated.status == "completed"
-    post = updated.postmortem
-    assert post.status == "ok"
-    assert post.strongest_areas == ["Clear mechanism"]
-    assert post.biggest_problems == ["Thin evidence"]
-    assert post.concepts_to_repeat == ["Add magnitudes"]
-    print("PASS: final postmortem aliases map to canonical fields with status ok")
-
-
-def test_missing_postmortem_twice_completes_as_missing() -> None:
-    session = _new_session(target_questions=1)
-    response = _json({
-        "score": 7, "critique": "Bottom line was late.", "fix": "Lead with the view.",
-    })
-    provider = FakeProvider([response, response])
-    updated, _ = evaluate_answer(session.id, "My answer.", provider=provider)
-    assert len(provider.calls) == 2
-    answer = updated.questions[-1].answers[-1]
-    assert answer.score == 7
-    assert updated.status == "completed"
-    post = updated.postmortem
-    assert post.status == "missing"
-    assert post.overall_performance == ""
-    print("PASS: a missing postmortem twice completes as missing without a fake summary")
-
-
-def test_rank_picks_first_evaluation_and_keeps_repair_postmortem() -> None:
-    session = _new_session(target_questions=1)
+def test_rank_picks_the_higher_ranked_evaluation() -> None:
+    session = _new_session()
     provider = FakeProvider([
-        _json({"score": 7, "critique": "First critique.", "fix": "First fix."}),
+        _json({"score": 7, "critique": "", "fix": "", "next_question": "First question?"}),
         _json({
-            "score": 7, "critique": "", "fix": "",
-            "postmortem": {
-                "overall_performance": "Repair summary.",
-                "biggest_problems": ["p"],
-                "strongest_areas": ["s"],
-                "concepts_to_repeat": ["c"],
-            },
+            "score": 6, "critique": "Repair critique.", "fix": "Repair fix.",
+            "next_question": "Repair question?",
         }),
     ])
-    updated, _ = evaluate_answer(session.id, "My answer.", provider=provider)
+    updated, result = evaluate_answer(session.id, "My answer.", provider=provider)
     assert len(provider.calls) == 2
     answer = updated.questions[-1].answers[-1]
-    # The first evaluation is 'ok'; the repair is 'partial' with the postmortem.
+    # The first is 'partial' (empty critique); the repair is 'ok' and wins.
     assert answer.evaluation_status == "ok"
-    assert answer.critique == "First critique."
-    assert updated.postmortem.status == "ok"
-    assert updated.postmortem.overall_performance == "Repair summary."
-    print("PASS: rank picks the first evaluation; the repair's postmortem is kept")
+    assert answer.critique == "Repair critique."
+    assert result["next_question"] == "Repair question?"
+    print("PASS: the higher-ranked evaluation wins; a tie prefers the repair")
 
 
 class _ExplodingCompletions:
@@ -739,6 +733,248 @@ def test_p6_band_gate_keeps_phase1_and_hides_incomparable() -> None:
     print("PASS: P6 band shows for Phase 1, hides for incomparable, and uses the family band text")
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 batch B (Task 3): separate end-of-interview synthesis.
+# ---------------------------------------------------------------------------
+
+
+def _answer(
+    text: str = "answer", score: int | None = 7, *, is_retry: bool = False,
+    tags: list[str] | None = None, status: str = "ok",
+) -> InterviewAnswer:
+    return InterviewAnswer(
+        text=text, score=score, is_retry=is_retry, failure_tags=list(tags or []),
+        critique="a critique", fix="a fix", evaluation_status=status,
+    )
+
+
+def _completed_session(
+    session_id: str,
+    questions: list[InterviewQuestion],
+    *,
+    view_ids: list[str] | None = None,
+    preset_key: str = "view_deliver",
+    mode: str = "Discussion",
+    style: str = "Deliver",
+    rubric_id: str = "argument-v3",
+    postmortem: InterviewPostmortem | None = None,
+) -> InterviewSession:
+    return InterviewSession(
+        id=session_id, mode=mode, preset_key=preset_key, rubric_id=rubric_id,
+        practice_style=style, topic="Term premium", model="test-model",
+        status="completed", completed_at=datetime.now(timezone.utc),
+        view_ids=list(view_ids or []), postmortem=postmortem, questions=questions,
+    )
+
+
+def _postmortem_json(
+    overall: str = "Solid overall.", strongest=None, problems=None, repeat=None,
+) -> str:
+    return _json({
+        "overall_performance": overall,
+        "strongest_areas": ["Q1: clear mechanism"] if strongest is None else strongest,
+        "biggest_problems": ["knowledge: Q2 gap"] if problems is None else problems,
+        "concepts_to_repeat": ["Drill X"] if repeat is None else repeat,
+    })
+
+
+def test_p7_final_turn_is_ordinary_and_pending() -> None:
+    assert "postmortem" not in _evaluation_schema(final_turn=True), \
+        "the final turn must not request a postmortem"
+    session = _new_session(target_questions=1)
+    provider = FakeProvider([_json({
+        "score": 7, "critique": "Bottom line was late.", "fix": "Lead with the view.",
+    })])
+    updated, result = evaluate_answer(session.id, "My answer.", provider=provider)
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["options"].max_tokens == EVAL_MAX_TOKENS, \
+        "the final turn uses the ordinary budget"
+    assert result["done"] is True
+    assert updated.status == "completed"
+    assert updated.postmortem is not None and updated.postmortem.status == "pending"
+    print("PASS: P7 the final turn is ordinary, one call, completed with a pending summary")
+
+
+def test_p8_synthesis_input_shape_and_view_diagnostic() -> None:
+    view_id = "view-p8"
+    _install_state_stub()
+    _seed_view(view_id)
+    _patch_history_file(_temp_history_file())
+    long_answer = "L" * 1500
+    questions = []
+    for number in range(1, 15):
+        answers = [_answer(text=long_answer if number == 1 else f"answer {number}", score=7)]
+        if number == 7:
+            answers.append(_answer(text="retry answer", score=8, is_retry=True))
+        questions.append(InterviewQuestion(text=f"question {number}", answers=answers))
+    session = _completed_session(
+        "p8-session", questions, view_ids=[view_id],
+        postmortem=InterviewPostmortem(status="pending"),
+    )
+    save_session(session)
+
+    provider = FakeProvider([_postmortem_json()])
+    updated = synthesize_session(session.id, provider=provider)
+    assert len(provider.calls) == 1
+    assert updated.postmortem.status == "ok"
+    prompt = json.loads(provider.calls[0]["messages"][1]["content"])
+    records = prompt["answers"]
+    assert len(records) == 15, "14 first answers plus one retry"
+    assert sum(1 for record in records if record["attempt"] == "retry") == 1
+    first = next(record for record in records if record["question"].startswith("Q1:"))
+    assert len(first["answer"]) == 1000, "a >3-question session caps answers at 1000 characters"
+    assert _view_practice(view_id).latest_diagnostic, "the View diagnostic must be written"
+    print("PASS: P8 15 records, retry marked, long answer capped at 1000, diagnostic written")
+
+
+def test_p9_short_session_keeps_full_answer_text() -> None:
+    long_answer = "S" * 1500
+    questions = [
+        InterviewQuestion(text="q1", answers=[_answer(text=long_answer, score=7)]),
+        InterviewQuestion(text="q2", answers=[_answer(text="short", score=6)]),
+    ]
+    _patch_history_file(_temp_history_file())
+    session = _completed_session(
+        "p9-session", questions, postmortem=InterviewPostmortem(status="pending"),
+    )
+    save_session(session)
+    provider = FakeProvider([_postmortem_json()])
+    synthesize_session(session.id, provider=provider)
+    prompt = json.loads(provider.calls[0]["messages"][1]["content"])
+    first = prompt["answers"][0]
+    assert first["answer"] == long_answer, "a <=3-question session keeps full answer text"
+    assert len(first["answer"]) == 1500
+    print("PASS: P9 a short session passes full answer text to synthesis")
+
+
+def test_p10_synthesis_input_carries_retry_free_stats() -> None:
+    questions = [
+        InterviewQuestion(text="q1", answers=[
+            _answer(text="a1", score=8),
+            _answer(text="retry", score=2, is_retry=True, status="partial"),
+        ]),
+        InterviewQuestion(text="q2", answers=[_answer(text="a2", score=6)]),
+    ]
+    _patch_history_file(_temp_history_file())
+    session = _completed_session(
+        "p10-session", questions, postmortem=InterviewPostmortem(status="pending"),
+    )
+    save_session(session)
+    stats = session_stats(session)
+    assert stats["first_attempt_count"] == 2
+    assert stats["evaluated_count"] == 2
+    assert stats["mean_first_attempt_score"] == 7.0, "retries must be excluded"
+    provider = FakeProvider([_postmortem_json()])
+    synthesize_session(session.id, provider=provider)
+    sent = json.loads(provider.calls[0]["messages"][1]["content"])["session_stats"]
+    assert sent["answers_first_attempt"] == 2
+    assert sent["answers_evaluated"] == 2
+    assert sent["mean_first_attempt_score"] == 7.0, "input stats must exclude the retry"
+    print("PASS: P10 synthesis input carries retry-free session_stats numbers")
+
+
+def test_p11_synthesis_repair_and_output_failure() -> None:
+    _patch_history_file(_temp_history_file())
+    session = _completed_session(
+        "p11-a", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        postmortem=InterviewPostmortem(status="pending"),
+    )
+    save_session(session)
+    provider = FakeProvider(["not valid json", _postmortem_json()])
+    updated = synthesize_session(session.id, provider=provider)
+    assert len(provider.calls) == 2
+    assert provider.calls[0]["options"].max_tokens == SYNTHESIS_MAX_TOKENS
+    assert provider.calls[1]["options"].max_tokens == int(SYNTHESIS_MAX_TOKENS * 1.5)
+    assert updated.postmortem.status == "ok"
+    assert updated.postmortem.synthesis_error == ""
+
+    session_b = _completed_session(
+        "p11-b", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        postmortem=InterviewPostmortem(status="pending"),
+    )
+    save_session(session_b)
+    provider_b = FakeProvider(["not json", "still not json"])
+    updated_b = synthesize_session(session_b.id, provider=provider_b)
+    assert len(provider_b.calls) == 2
+    assert updated_b.postmortem.status == "missing"
+    assert updated_b.postmortem.synthesis_error == "output"
+    print("PASS: P11 malformed-then-valid repairs to ok; malformed twice records an output failure")
+
+
+def test_p12_provider_failure_never_downgrades_or_double_counts() -> None:
+    view_id = "view-p12"
+    _install_state_stub()
+    _seed_view(view_id)
+    _patch_history_file(_temp_history_file())
+    session = start_session(
+        mode="Discussion", topic="Term premium", preset_key="view_deliver",
+        target_questions=1, view_ids=[view_id], practice_style="Deliver",
+    )
+    evaluation = FakeProvider([_json({"score": 7, "critique": "c", "fix": "f"})])
+    completed, result = evaluate_answer(session.id, "My answer.", provider=evaluation)
+    assert result["done"] is True
+    practice = _view_practice(view_id)
+    assert practice.practice_count == 1 and practice.delivery_attempts == 1
+    assert practice.latest_diagnostic == []
+
+    failing = ProviderFailureProvider()
+    updated = synthesize_session(session.id, provider=failing)
+    assert failing.calls == 1
+    assert updated.postmortem.status == "missing"
+    assert updated.postmortem.synthesis_error == "provider"
+    practice = _view_practice(view_id)
+    assert practice.practice_count == 1, "synthesis must not bump counts again"
+    assert practice.delivery_attempts == 1
+    assert practice.latest_diagnostic == [], "a failed synthesis must not touch the diagnostic"
+    print("PASS: P12 provider failure records 'provider', bumps counts once, leaves diagnostics")
+
+
+def test_p13_ok_is_not_rebilled_and_partial_is_never_downgraded() -> None:
+    _patch_history_file(_temp_history_file())
+    ok_session = _completed_session(
+        "p13-ok", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        postmortem=InterviewPostmortem(
+            overall_performance="Good.", biggest_problems=["p"],
+            strongest_areas=["s"], concepts_to_repeat=["c"], status="ok",
+        ),
+    )
+    save_session(ok_session)
+    provider = FakeProvider([])
+    returned = synthesize_session(ok_session.id, provider=provider)
+    assert len(provider.calls) == 0, "an existing ok summary must not be re-billed"
+    assert returned.postmortem.status == "ok"
+
+    partial_session = _completed_session(
+        "p13-partial", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        postmortem=InterviewPostmortem(
+            overall_performance="Partial.", biggest_problems=["p"],
+            strongest_areas=[], concepts_to_repeat=[], status="partial",
+        ),
+    )
+    save_session(partial_session)
+    provider_b = FakeProvider(["not json", "still not json"])
+    returned_b = synthesize_session(partial_session.id, provider=provider_b)
+    assert returned_b.postmortem.status == "partial", "a worse retry must not downgrade"
+    assert returned_b.postmortem.overall_performance == "Partial."
+    print("PASS: P13 ok summaries are not re-billed and partial summaries are never downgraded")
+
+
+def test_p14_phase1_missing_summary_is_upgraded() -> None:
+    _patch_history_file(_temp_history_file())
+    session = _completed_session(
+        "p14-session",
+        [InterviewQuestion(text="q", answers=[_answer(text="my answer", score=7, tags=["RAMBLE"])])],
+        postmortem=InterviewPostmortem(status="missing"),
+    )
+    session.prompt_pack_version = LEGACY_V2_PROMPT_PACK
+    save_session(session)
+    provider = FakeProvider([_postmortem_json()])
+    updated = synthesize_session(session.id, provider=provider)
+    assert len(provider.calls) == 1
+    assert updated.postmortem.status == "ok"
+    print("PASS: P14 a Phase 1 session's missing summary is upgraded to ok")
+
+
 def main() -> None:
     print("Validating interview practice persistence and evaluation...\n")
     _install_controller_stubs()
@@ -756,9 +992,7 @@ def main() -> None:
     test_provider_failure_during_repair_aborts_the_turn()
     test_malformed_then_valid_without_question_uses_fallback()
     test_model_done_flag_cannot_end_a_session_early()
-    test_final_postmortem_aliases_map_and_mark_ok()
-    test_missing_postmortem_twice_completes_as_missing()
-    test_rank_picks_first_evaluation_and_keeps_repair_postmortem()
+    test_rank_picks_the_higher_ranked_evaluation()
     test_turn_schema_requires_fix_and_drops_empty_outside_drill()
     test_sdk_failure_is_wrapped_as_provider_error()
     test_provider_failure_surfaces_and_saves_nothing()
@@ -770,6 +1004,14 @@ def main() -> None:
     test_p4_presets_have_a_family_and_family_rubric()
     test_p5_start_session_stores_family_rubric_id()
     test_p6_band_gate_keeps_phase1_and_hides_incomparable()
+    test_p7_final_turn_is_ordinary_and_pending()
+    test_p8_synthesis_input_shape_and_view_diagnostic()
+    test_p9_short_session_keeps_full_answer_text()
+    test_p10_synthesis_input_carries_retry_free_stats()
+    test_p11_synthesis_repair_and_output_failure()
+    test_p12_provider_failure_never_downgrades_or_double_counts()
+    test_p13_ok_is_not_rebilled_and_partial_is_never_downgraded()
+    test_p14_phase1_missing_summary_is_upgraded()
     print("\nAll validation scenarios passed.")
 
 

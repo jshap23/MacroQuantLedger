@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, model_validator
@@ -9,7 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from models.interview import InterviewAnswer, InterviewPostmortem, InterviewQuestion, InterviewSession
 from services.interview_llm import (
     CompletionOptions, FAILURE_TAGS, LLMProvider, InterviewOutputError,
-    default_provider, interview_model, parse_json_response,
+    InterviewProviderError, default_provider, interview_model, parse_json_response,
 )
 from services.interview_prompts import (
     PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
@@ -22,9 +23,11 @@ from storage.interview_store import (
 # Per-turn token budgets. A first failure is often truncation, so the single
 # repair retry gets REPAIR_TOKEN_FACTOR times the first call's budget.
 EVAL_MAX_TOKENS = 450
-EVAL_FINAL_MAX_TOKENS = 900
 REPAIR_TOKEN_FACTOR = 1.5
 QUESTION_RECOVERY_MAX_TOKENS = 100
+# The whole-interview review is a separate call after completion, with its own
+# budget and its own single repair.
+SYNTHESIS_MAX_TOKENS = 900
 # Used when the turn's single repair is already spent and the model still did
 # not return a next question. Never triggers a third call.
 FALLBACK_FOLLOW_UP = (
@@ -443,12 +446,14 @@ class TurnEvaluation(BaseModel):
 
 
 def _evaluation_schema(final_turn: bool, rubric_family: str = "argument") -> dict:
-    """Keep ordinary turns compact; postmortems belong only to the final turn.
+    """Per-turn evaluation schema. The whole-interview review is separate.
 
     The ``score`` description is the family rubric for this question type, so a
-    technical answer is not graded against thesis-shaped criteria.
+    technical answer is not graded against thesis-shaped criteria. The final
+    turn is an ordinary turn: it evaluates the last answer only and never asks
+    for a postmortem.
     """
-    schema = {
+    return {
         "score": RUBRICS[rubric_family][1],
         "failure_tags": "array of 0-3 tag strings",
         "critique": (
@@ -465,20 +470,6 @@ def _evaluation_schema(final_turn: bool, rubric_family: str = "argument") -> dic
         "next_topic": "string", "concept": "string (underlying concept)",
         "difficulty": "optional string",
     }
-    if final_turn:
-        schema["postmortem"] = {
-            "overall_performance": "brief overall assessment or pass likelihood",
-            "biggest_problems": "max 3; also used for Work on / Still weak / risks",
-            "strongest_areas": "max 3; also used for Strong / Improved",
-            "concepts_to_repeat": "short list; also used for Repeat / Next priority",
-            "root_causes": {
-                "knowledge": "include questions exposing knowledge gaps when relevant",
-                "evidence/research": "", "reasoning": "",
-                "communication": "include questions where knowledge was present but communication failed when relevant",
-                "pressure handling": "",
-            },
-        }
-    return schema
 
 
 def _parse_evaluation_data(raw: str) -> dict:
@@ -605,7 +596,7 @@ def evaluate_answer(
         "output_schema": _evaluation_schema(final_turn, rubric_family),
     }
     llm = provider or default_provider()
-    base_tokens = EVAL_FINAL_MAX_TOKENS if final_turn else EVAL_MAX_TOKENS
+    base_tokens = EVAL_MAX_TOKENS
 
     def complete(
         user_message: str, *, max_tokens: int, json_mode: bool = True, temperature: float = 0.4,
@@ -630,24 +621,17 @@ def evaluate_answer(
     # retry (invalid score or empty critique) or the plain-text question
     # recovery, whichever is needed first.
     repair_used = False
-    first_data, first_evaluation, problems = _read_turn(complete(
+    _, first_evaluation, problems = _read_turn(complete(
         "Make the next interviewer move using the required JSON schema.",
         max_tokens=base_tokens,
     ))
-    data, evaluation = first_data, first_evaluation
-    first_postmortem = _build_postmortem(first_data) if final_turn else None
-    repair_postmortem: InterviewPostmortem | None = None
-    if final_turn and first_postmortem is not None and first_postmortem.status == "missing":
-        # A missing final review is a problem for the turn's one repair, which
-        # re-requests the whole final JSON and lists every problem at once.
-        problems.append("postmortem missing")
+    evaluation = first_evaluation
     if problems:
         repair_used = True
-        repair_data, repair_evaluation, _ = _read_turn(complete(
+        _, repair_evaluation, _ = _read_turn(complete(
             _repair_message(problems),
             max_tokens=int(base_tokens * REPAIR_TOKEN_FACTOR),
         ))
-        repair_postmortem = _build_postmortem(repair_data) if final_turn else None
         first_rank = _EVALUATION_STATUS_RANK.get(first_evaluation.status, 0)
         repair_rank = _EVALUATION_STATUS_RANK.get(repair_evaluation.status, 0)
         if first_rank == 0 and repair_rank == 0:
@@ -656,9 +640,9 @@ def evaluate_answer(
             )
         # The higher-ranked evaluation wins; a tie prefers the repair.
         if repair_rank >= first_rank:
-            data, evaluation = repair_data, repair_evaluation
+            evaluation = repair_evaluation
         else:
-            data, evaluation = first_data, first_evaluation
+            evaluation = first_evaluation
         if not evaluation.next_question and first_evaluation.next_question:
             # The chosen response dropped the follow-up the first one supplied.
             evaluation.next_question = first_evaluation.next_question
@@ -699,33 +683,26 @@ def evaluate_answer(
         "done": done,
     }
     if done:
-        postmortem = _build_postmortem(data)
-        # The postmortem is chosen independently of which evaluation won: keep
-        # the better of the first and repair reviews.
-        alternative = repair_postmortem if data is first_data else first_postmortem
-        if _postmortem_rank(alternative) > _postmortem_rank(postmortem):
-            postmortem = alternative
-        session.postmortem = postmortem
+        # The final turn is an ordinary turn: the review is written separately
+        # by synthesize_session(), so completion only marks the pending state
+        # and bumps the View counts (exactly once per session).
+        session.postmortem = InterviewPostmortem(status="pending")
         session.status = "completed"
         session.completed_at = datetime.now(timezone.utc)
         session.pending_move = {}
-        _record_view_practice(session)
+        _record_view_counts(session)
     else:
         session.pending_move = result
     save_session(session)
     return session, result
 
 
-def _record_view_practice(session: InterviewSession) -> None:
-    """Close the loop without ever rewriting the user's underlying View."""
+def _record_view_counts(session: InterviewSession) -> None:
+    """Bump per-View practice counts on completion, once per session."""
     if not session.view_ids:
         return
     from storage.persistence import load_state, save_state
     state = load_state()
-    usable_postmortem = bool(session.postmortem) and session.postmortem.status in ("ok", "partial")
-    diagnostics: list[str] = []
-    if usable_postmortem:
-        diagnostics = (session.postmortem.biggest_problems + session.postmortem.strongest_areas)[:3]
     style = session.practice_style.lower()
     for view in state.topic_views:
         if view.id not in session.view_ids:
@@ -738,11 +715,193 @@ def _record_view_practice(session: InterviewSession) -> None:
             view.practice.discussion_attempts += 1
         elif style == "defend":
             view.practice.defense_attempts += 1
-        # Counts always move, but a missing or legacy review must not overwrite
-        # the last usable diagnostic, and neither must an empty one.
-        if usable_postmortem and diagnostics:
+    save_state(state)
+
+
+def _record_view_diagnostic(session: InterviewSession) -> None:
+    """Write the review's diagnostics onto the View, only with non-empty content.
+
+    Runs after a successful synthesis. A missing or legacy review must not
+    overwrite the last usable diagnostic, and neither must an empty one.
+    """
+    if not session.view_ids or session.postmortem is None:
+        return
+    diagnostics = (session.postmortem.biggest_problems + session.postmortem.strongest_areas)[:3]
+    if not diagnostics:
+        return
+    from storage.persistence import load_state, save_state
+    state = load_state()
+    for view in state.topic_views:
+        if view.id in session.view_ids:
             view.practice.latest_diagnostic = diagnostics
     save_state(state)
+
+
+def session_stats(session: InterviewSession) -> dict:
+    """Pure end-of-session numbers for the summary and the postmortem stats line.
+
+    Retries are excluded everywhere: coverage is scored first attempts over
+    total first attempts, the mean score is over scored first attempts, and tag
+    counts come from first attempts only.
+    """
+    answers = [answer for question in session.questions for answer in question.answers]
+    first_attempts = [answer for answer in answers if not answer.is_retry]
+    evaluated = [answer for answer in first_attempts if answer.score is not None]
+    scores = [answer.score for answer in evaluated]
+    band = session_band(session)
+    tag_counts = Counter(tag for answer in first_attempts for tag in answer.failure_tags)
+    return {
+        "first_attempt_count": len(first_attempts),
+        "evaluated_count": len(evaluated),
+        "coverage": (len(evaluated) / len(first_attempts)) if first_attempts else 0.0,
+        "mean_first_attempt_score": (sum(scores) / len(scores)) if scores else None,
+        "band": band[0] if band else None,
+        "tag_counts": dict(tag_counts),
+    }
+
+
+# The whole-interview review is a separate call after completion. The model is
+# given the preset's own end-of-session instructions, the app-computed numbers
+# as facts, and one record per answer.
+_SYNTHESIS_SYSTEM = (
+    "You write the whole-interview review now that the practice session has "
+    "ended. You are given the setup, app-computed numbers you must treat as "
+    "facts, and one record per answer. Follow the supplied end-of-session "
+    "instructions. Cite question numbers. Never invent an answer or a score. "
+    "Return JSON only, with no preamble."
+)
+
+
+def _synthesis_records(session: InterviewSession) -> list[dict]:
+    """One record per answer; long answers are capped unless the session is short.
+
+    Sessions with three or fewer questions pass full answer text. Longer
+    sessions cap each answer at 1,000 characters so the input stays bounded.
+    """
+    cap = None if len(session.questions) <= 3 else 1000
+    records: list[dict] = []
+    for number, question in enumerate(session.questions, start=1):
+        for answer in question.answers:
+            records.append({
+                "question": f"Q{number}: {question.text}",
+                "attempt": "retry" if answer.is_retry else "first",
+                "score": answer.score,
+                "failure_tags": list(answer.failure_tags),
+                "critique": answer.critique,
+                "fix": answer.fix,
+                "status": answer.evaluation_status,
+                "answer": answer.text if cap is None else answer.text[:cap],
+            })
+    return records
+
+
+def _synthesis_prompt(session: InterviewSession) -> dict:
+    preset = get_preset(session.preset_key, session.mode)
+    stats = session_stats(session)
+    return {
+        "task": (
+            "The interview is over. Write only the whole-interview review from "
+            "the records below. Do not ask another question."
+        ),
+        "setup": {
+            "topic": session.topic,
+            "role": session.role,
+            "preset": preset.label,
+            "compact_brief": session.compact_brief,
+            "stored_view": session.view_context[:6000],
+        },
+        "session_stats": {
+            "answers_first_attempt": stats["first_attempt_count"],
+            "answers_evaluated": stats["evaluated_count"],
+            "coverage": stats["coverage"],
+            "mean_first_attempt_score": stats["mean_first_attempt_score"],
+            "band": stats["band"],
+            "most_frequent_tags": [
+                tag for tag, _ in Counter(stats["tag_counts"]).most_common(5)
+            ],
+        },
+        "session_stats_note": (
+            "These numbers are computed by the app from the answers. Treat them "
+            "as facts; do not recompute or contradict them."
+        ),
+        "end_of_session_instructions": preset.prompt,
+        "answers": _synthesis_records(session),
+        "output_schema": {
+            "overall_performance": "2-4 sentences",
+            "strongest_areas": "up to 3, each citing question numbers such as 'Q2, Q5: ...'",
+            "biggest_problems": (
+                "up to 3, each citing question numbers and starting with one "
+                "category: knowledge, evidence, reasoning, communication or pressure"
+            ),
+            "concepts_to_repeat": "up to 3 concrete next drills",
+        },
+    }
+
+
+def _read_synthesis(raw: str) -> tuple[InterviewPostmortem, bool]:
+    """Parse a synthesis response into a postmortem; flag an unusable review."""
+    try:
+        data = parse_json_response(raw)
+    except (ValueError, json.JSONDecodeError):
+        return InterviewPostmortem(status="missing"), True
+    if not isinstance(data, dict):
+        return InterviewPostmortem(status="missing"), True
+    postmortem = _build_postmortem({"postmortem": data})
+    return postmortem, postmortem.status == "missing"
+
+
+def synthesize_session(
+    session_id: str, provider: LLMProvider | None = None,
+) -> InterviewSession:
+    """Write the whole-interview review for a completed session.
+
+    One call, plus at most one repair at 1.5x the budget. Failures never raise
+    to the caller: a provider or output failure is recorded as ``missing`` with
+    ``synthesis_error`` set, and the View's diagnostic is left untouched. An
+    existing ``ok`` summary is never re-billed, and a usable summary is never
+    downgraded.
+    """
+    session = get_session(session_id)
+    if session is None or session.status != "completed":
+        raise RuntimeError("Only a completed session can be summarised.")
+    if session.postmortem is not None and session.postmortem.status == "ok":
+        return session
+    llm = provider or default_provider()
+    prompt = _synthesis_prompt(session)
+
+    def complete(max_tokens: int) -> str:
+        return llm.complete(
+            [
+                {"role": "system", "content": _SYNTHESIS_SYSTEM},
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+            CompletionOptions(
+                model=session.model or interview_model(), max_tokens=max_tokens,
+                temperature=0.4, json_mode=True,
+            ),
+        )
+
+    try:
+        postmortem, malformed = _read_synthesis(complete(SYNTHESIS_MAX_TOKENS))
+        if malformed:
+            postmortem, malformed = _read_synthesis(
+                complete(int(SYNTHESIS_MAX_TOKENS * REPAIR_TOKEN_FACTOR))
+            )
+    except InterviewProviderError:
+        postmortem = InterviewPostmortem(status="missing", synthesis_error="provider")
+    else:
+        if malformed:
+            postmortem = InterviewPostmortem(status="missing", synthesis_error="output")
+        else:
+            postmortem.synthesis_error = ""
+
+    # Never downgrade: a usable summary stays even if the retry comes back worse.
+    if _postmortem_rank(postmortem) >= _postmortem_rank(session.postmortem):
+        session.postmortem = postmortem
+    if session.postmortem is not None and session.postmortem.status in ("ok", "partial"):
+        _record_view_diagnostic(session)
+    save_session(session)
+    return session
 
 
 def advance_session(session_id: str, result: dict) -> InterviewSession:
