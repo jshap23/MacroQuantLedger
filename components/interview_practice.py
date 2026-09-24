@@ -1,12 +1,15 @@
 """Active interview practice UI: setup, quant model library, sparring loop, and performance view."""
 from __future__ import annotations
 
+import logging
 import random
 from collections import Counter, deque
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 from nicegui import run, ui
+
+_log = logging.getLogger(__name__)
 
 from services.interview_controller import (
     abandon_session, advance_session, answer_tips, band_visible, evaluate_answer,
@@ -2095,13 +2098,17 @@ async def _run_synthesis(state: dict, session_id: str, refresh) -> None:
 
     ``synthesize_session`` records provider and output failures on the session
     itself and never raises; the guard here only stops an unexpected error from
-    leaving the screen stuck on "Writing summary…".
+    leaving the screen stuck on "Writing summary…". The refreshed session is
+    applied only if the user is still on the same session, so starting or
+    opening another one meanwhile is not clobbered.
     """
     try:
         session = await run.io_bound(lambda: synthesize_session(session_id))
-        state["session"] = session
+        current = state.get("session")
+        if current is not None and current.id == session_id:
+            state["session"] = session
     except Exception:
-        pass
+        _log.exception("Interview synthesis failed for session %s", session_id)
     finally:
         state["synthesizing"].discard(session_id)
         refresh()

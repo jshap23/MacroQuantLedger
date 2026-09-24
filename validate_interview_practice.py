@@ -975,6 +975,67 @@ def test_p14_phase1_missing_summary_is_upgraded() -> None:
     print("PASS: P14 a Phase 1 session's missing summary is upgraded to ok")
 
 
+def test_pfix_empty_content_uses_repair_and_records_output() -> None:
+    # Empty content must behave like malformed output: one repair, then a
+    # recorded output failure, never a raised exception.
+    _patch_history_file(_temp_history_file())
+    session = _completed_session(
+        "pfix-empty", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        postmortem=InterviewPostmortem(status="pending"),
+    )
+    save_session(session)
+    provider = FakeProvider([InterviewOutputError("empty content"), _postmortem_json()])
+    updated = synthesize_session(session.id, provider=provider)
+    assert len(provider.calls) == 2, "empty content must still use the one repair"
+    assert provider.calls[1]["options"].max_tokens == int(SYNTHESIS_MAX_TOKENS * 1.5)
+    assert updated.postmortem.status == "ok"
+
+    session_b = _completed_session(
+        "pfix-empty-2", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        postmortem=InterviewPostmortem(status="pending"),
+    )
+    save_session(session_b)
+    provider_b = FakeProvider([
+        InterviewOutputError("empty content"), InterviewOutputError("empty content"),
+    ])
+    updated_b = synthesize_session(session_b.id, provider=provider_b)
+    assert len(provider_b.calls) == 2
+    assert updated_b.postmortem.status == "missing"
+    assert updated_b.postmortem.synthesis_error == "output"
+    print("PASS: empty synthesis content repairs to ok, or twice records an output failure")
+
+
+def test_pfix_older_session_retry_keeps_latest_diagnostic() -> None:
+    view_id = "view-pfix"
+    _install_state_stub()
+    _seed_view(view_id)
+    _patch_history_file(_temp_history_file())
+    older = _completed_session(
+        "pfix-older", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        view_ids=[view_id], postmortem=InterviewPostmortem(status="missing"),
+    )
+    older.completed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = _completed_session(
+        "pfix-newer", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        view_ids=[view_id], postmortem=InterviewPostmortem(status="missing"),
+    )
+    newer.completed_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    save_session(older)
+    save_session(newer)
+
+    synthesize_session("pfix-newer", provider=FakeProvider([
+        _postmortem_json(problems=["knowledge: newer"], strongest=["Q1: newer"]),
+    ]))
+    assert _view_practice(view_id).latest_diagnostic == ["knowledge: newer", "Q1: newer"]
+
+    synthesize_session("pfix-older", provider=FakeProvider([
+        _postmortem_json(problems=["knowledge: older"], strongest=["Q1: older"]),
+    ]))
+    assert _view_practice(view_id).latest_diagnostic == ["knowledge: newer", "Q1: newer"], \
+        "an older session's retried summary must not overwrite the newest diagnostic"
+    print("PASS: retrying an older session keeps the View's latest diagnostic")
+
+
 def main() -> None:
     print("Validating interview practice persistence and evaluation...\n")
     _install_controller_stubs()
@@ -1012,6 +1073,8 @@ def main() -> None:
     test_p12_provider_failure_never_downgrades_or_double_counts()
     test_p13_ok_is_not_rebilled_and_partial_is_never_downgraded()
     test_p14_phase1_missing_summary_is_upgraded()
+    test_pfix_empty_content_uses_repair_and_records_output()
+    test_pfix_older_session_retry_keeps_latest_diagnostic()
     print("\nAll validation scenarios passed.")
 
 

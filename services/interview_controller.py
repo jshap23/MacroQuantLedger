@@ -16,7 +16,8 @@ from services.interview_prompts import (
     PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
 )
 from storage.interview_store import (
-    effective_rubric_id, get_session, mark_review, save_session, weakness_context,
+    effective_rubric_id, get_session, load_database, mark_review, save_session,
+    weakness_context,
 )
 
 
@@ -718,23 +719,58 @@ def _record_view_counts(session: InterviewSession) -> None:
     save_state(state)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalize a possibly-naive datetime to aware UTC for comparison."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _is_latest_completed_for_view(session: InterviewSession, view_id: str, database) -> bool:
+    """True when no other completed session for this View is newer than this one."""
+    here = _as_utc(session.completed_at)
+    if here is None:
+        return False
+    for candidate in database.sessions:
+        if candidate.id == session.id or candidate.status != "completed":
+            continue
+        if view_id not in candidate.view_ids:
+            continue
+        there = _as_utc(candidate.completed_at)
+        if there is not None and there > here:
+            return False
+    return True
+
+
 def _record_view_diagnostic(session: InterviewSession) -> None:
     """Write the review's diagnostics onto the View, only with non-empty content.
 
-    Runs after a successful synthesis. A missing or legacy review must not
-    overwrite the last usable diagnostic, and neither must an empty one.
+    Runs after a successful synthesis, and only for a View whose most recent
+    completed session is this one: retrying an older session's summary must not
+    overwrite the diagnostic written by a newer session. A missing or legacy
+    review must not overwrite the last usable diagnostic, and neither must an
+    empty one.
     """
     if not session.view_ids or session.postmortem is None:
         return
     diagnostics = (session.postmortem.biggest_problems + session.postmortem.strongest_areas)[:3]
     if not diagnostics:
         return
+    database = load_database()
     from storage.persistence import load_state, save_state
     state = load_state()
+    changed = False
     for view in state.topic_views:
-        if view.id in session.view_ids:
-            view.practice.latest_diagnostic = diagnostics
-    save_state(state)
+        if view.id not in session.view_ids:
+            continue
+        if not _is_latest_completed_for_view(session, view.id, database):
+            continue
+        view.practice.latest_diagnostic = diagnostics
+        changed = True
+    if changed:
+        save_state(state)
 
 
 def session_stats(session: InterviewSession) -> dict:
@@ -870,16 +906,22 @@ def synthesize_session(
     prompt = _synthesis_prompt(session)
 
     def complete(max_tokens: int) -> str:
-        return llm.complete(
-            [
-                {"role": "system", "content": _SYNTHESIS_SYSTEM},
-                {"role": "user", "content": json.dumps(prompt)},
-            ],
-            CompletionOptions(
-                model=session.model or interview_model(), max_tokens=max_tokens,
-                temperature=0.4, json_mode=True,
-            ),
-        )
+        try:
+            return llm.complete(
+                [
+                    {"role": "system", "content": _SYNTHESIS_SYSTEM},
+                    {"role": "user", "content": json.dumps(prompt)},
+                ],
+                CompletionOptions(
+                    model=session.model or interview_model(), max_tokens=max_tokens,
+                    temperature=0.4, json_mode=True,
+                ),
+            )
+        except InterviewOutputError:
+            # Empty content is an output problem, not a provider failure: treat
+            # it like malformed output so the single repair still runs and a
+            # second empty response records an output failure instead of raising.
+            return ""
 
     try:
         postmortem, malformed = _read_synthesis(complete(SYNTHESIS_MAX_TOKENS))
