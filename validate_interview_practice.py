@@ -27,6 +27,7 @@ from services.interview_controller import (
     _evaluation_schema,
     band_visible,
     evaluate_answer,
+    rubric_bands,
     session_band,
     start_session,
 )
@@ -664,15 +665,23 @@ def test_p3_trend_eligible_rejects_incomparable_answers() -> None:
 
 def test_p4_presets_have_a_family_and_family_rubric() -> None:
     families = {"argument", "technical", "interview"}
+
+    def normalized(text: str) -> str:
+        return " ".join(text.split())
+
+    seven_eight = {
+        family: normalized(rubric_bands(family)[3][1]) for family in families
+    }
+    assert len(set(seven_eight.values())) == 3, "each family needs a distinct 7-8 line"
     for key, preset in PRESETS.items():
         family = preset.rubric_family
         assert family in families, f"{key} has rubric_family={family!r}"
         schema = _evaluation_schema(final_turn=False, rubric_family=family)
-        score_desc = schema["score"]
-        assert RUBRICS[family][1] in score_desc, f"{key} schema must carry its own rubric"
+        score_desc = normalized(schema["score"])
+        assert seven_eight[family] in score_desc, f"{key} schema must carry its own 7-8 line"
         for other in families - {family}:
-            assert RUBRICS[other][1] not in score_desc, f"{key} schema leaked {other} rubric"
-    print("PASS: P4 every preset has a family and its own rubric text, not the others'")
+            assert seven_eight[other] not in score_desc, f"{key} schema leaked {other}'s 7-8 line"
+    print("PASS: P4 every preset carries its own family's 7-8 line and not the others'")
 
 
 def test_p5_start_session_stores_family_rubric_id() -> None:
@@ -722,7 +731,12 @@ def test_p6_band_gate_keeps_phase1_and_hides_incomparable() -> None:
     assert not band_visible(session(prompt_override="Custom.")), "custom sessions hide the band"
     assert not band_visible(session(prompt_pack_version="2025.01.01-v1")), \
         "unanchored sessions hide the band"
-    print("PASS: P6 band shows for Phase 1 and hides for custom and unanchored sessions")
+
+    technical = session(rubric_id="technical-v3", prompt_pack_version=PROMPT_PACK_VERSION)
+    technical_band = session_band(technical)
+    assert technical_band is not None
+    assert "Correct result or method" in technical_band[1], "band text must use the session's family"
+    print("PASS: P6 band shows for Phase 1, hides for incomparable, and uses the family band text")
 
 
 def main() -> None:

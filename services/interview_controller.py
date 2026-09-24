@@ -32,13 +32,16 @@ FALLBACK_FOLLOW_UP = (
 )
 
 
-# Anchored scoring rubric, split into three families in Phase 2. All three keep
-# the same 1-10 thresholds and band descriptors as the Phase 1 rubric so
-# session_band() and the postmortem band line are unchanged; only the criteria
-# emphasis differs by question type. rubric_id identifies which family graded a
-# session so scores are only compared like with like.
-_SHARED_RUBRIC = (
-    "integer 1-10, graded against this rubric:\n"
+# Anchored scoring rubric, split into three families in Phase 2. Each family
+# keeps the same 1-10 score ranges, the same grade-discipline paragraph, and the
+# same closing sentence; only the band descriptors differ, so a technical answer
+# is not graded against thesis-shaped bands. rubric_id records which family
+# graded a session so scores are only compared like with like.
+_RUBRIC_INTRO = "integer 1-10, graded against this rubric:\n"
+
+# Argument keeps the Phase 1 band block verbatim so legacy and Phase 1 sessions
+# render exactly as before.
+_ARGUMENT_BANDS = (
     "  1-2  Did not answer the question asked, or the core claim is wrong.\n"
     "  3-4  Relevant content, but no clear bottom line; factors named without mechanism.\n"
     "  5-6  Clear view stated; partial mechanism; evidence thin, vague, or unsupported.\n"
@@ -48,20 +51,34 @@ _SHARED_RUBRIC = (
     "       view into an implementable decision.\n"
 )
 
-_RUBRIC_CRITERIA = {
-    "argument": (
-        "clear conclusion early; causal mechanism; evidence with magnitudes; "
-        "the key risk or what would change the view; the practical implication."
-    ),
-    "technical": (
-        "correct result or method; reasoning shown in steps; assumptions stated; "
-        "a sanity check or edge case; precise terms."
-    ),
-    "interview": (
-        "answers the question directly; a specific example with the candidate's "
-        "own role; result or impact, quantified where possible; relevance to the "
-        "role; concise."
-    ),
+_TECHNICAL_BANDS = (
+    "  1-2  Did not answer the question asked, or the result or method is wrong.\n"
+    "  3-4  Relevant approach, but the result is wrong or unfinished, or steps are\n"
+    "       missing so the reasoning can't be followed.\n"
+    "  5-6  Correct result or method, with gaps: key steps skipped, assumptions\n"
+    "       unstated, or imprecise terms.\n"
+    "  7-8  Correct result or method; reasoning shown in clear steps; assumptions\n"
+    "       stated; precise terms.\n"
+    "  9-10 All of 7-8, plus a sanity check or edge case, and says when the method\n"
+    "       breaks down or what a better alternative would be.\n"
+)
+
+_INTERVIEW_BANDS = (
+    "  1-2  Did not answer the question asked, or the answer hurts the candidacy.\n"
+    "  3-4  Relevant but generic: no specific example, or the candidate's own role\n"
+    "       is unclear.\n"
+    "  5-6  Answers the question with a specific example, but the result is vague\n"
+    "       or the answer rambles.\n"
+    "  7-8  Direct answer first; a specific example with the candidate's own\n"
+    "       actions; a concrete result, quantified where possible; concise.\n"
+    "  9-10 All of 7-8, plus explicit relevance to the role and a reflective point\n"
+    "       (what they learned or would do differently).\n"
+)
+
+_RUBRIC_BANDS_BY_FAMILY = {
+    "argument": _ARGUMENT_BANDS,
+    "technical": _TECHNICAL_BANDS,
+    "interview": _INTERVIEW_BANDS,
 }
 
 # Grade discipline carried over from Phase 1 so the 7-8 bar does not drift.
@@ -79,30 +96,27 @@ _RUBRIC_CLOSING = (
 RUBRICS: dict[str, tuple[str, str]] = {
     family: (
         f"{family}-v3",
-        f"{_SHARED_RUBRIC}"
-        f"Criteria for this question type: {criteria}\n"
-        f"{_RUBRIC_DISCIPLINE}\n"
-        f"{_RUBRIC_CLOSING}",
+        f"{_RUBRIC_INTRO}{bands}{_RUBRIC_DISCIPLINE}\n{_RUBRIC_CLOSING}",
     )
-    for family, criteria in _RUBRIC_CRITERIA.items()
+    for family, bands in _RUBRIC_BANDS_BY_FAMILY.items()
 }
 
-# The five bands are identical across families. These patterns read them back
-# out of the shared block so the postmortem can print a band verbatim and never
-# drift from the rubric text.
+# These patterns read each family's band block back so the postmortem can print
+# a band verbatim and never drift from the rubric text.
 _BAND_LINE = re.compile(r"^ {2}(\d+)-(\d+)\s+(.*)$")
 _BAND_CONT = re.compile(r"^ {7}(\S.*)$")
 
 
-def rubric_bands() -> list[tuple[str, str]]:
-    """The five rubric bands as (label, descriptor), verbatim from the rubric.
+def rubric_bands(family: str = "argument") -> list[tuple[str, str]]:
+    """The five rubric bands as (label, descriptor), verbatim for a family.
 
     Descriptors wrapped over two source lines are joined with a single space so
     a band can be shown on one line without rewording anything.
     """
+    block = _RUBRIC_BANDS_BY_FAMILY.get(family, _ARGUMENT_BANDS)
     bands: list[tuple[str, str]] = []
     current: list[str] | None = None
-    for line in _SHARED_RUBRIC.splitlines():
+    for line in block.splitlines():
         match = _BAND_LINE.match(line)
         if match:
             if current:
@@ -121,15 +135,17 @@ def rubric_bands() -> list[tuple[str, str]]:
     return bands
 
 
-def rubric_band_for(score: int | None) -> tuple[str, str, str | None] | None:
+def rubric_band_for(
+    score: int | None, family: str = "argument",
+) -> tuple[str, str, str | None] | None:
     """Map a 1-10 score to (band label, descriptor, next band descriptor).
 
-    The next-band descriptor is None for the top band (9-10), which has no
-    higher band to point at.
+    ``family`` selects which family's band wording is used. The next-band
+    descriptor is None for the top band (9-10), which has no higher band.
     """
     if score is None:
         return None
-    bands = rubric_bands()
+    bands = rubric_bands(family)
     for index, (label, descriptor) in enumerate(bands):
         low, high = (int(part) for part in label.split("-"))
         if low <= score <= high:
@@ -141,13 +157,27 @@ def rubric_band_for(score: int | None) -> tuple[str, str, str | None] | None:
 BAND_MIN_COVERAGE = 0.75
 
 
+def rubric_family_for(session: InterviewSession) -> str:
+    """The band family a session's score is shown against.
+
+    A v3 rubric id maps to its family. Every legacy or custom id — "shared-v2",
+    "unanchored", "custom" — uses the argument bands, which are the Phase 1
+    bands.
+    """
+    rubric_id = effective_rubric_id(session)
+    if rubric_id.endswith("-v3") and rubric_id[:-3] in RUBRICS:
+        return rubric_id[:-3]
+    return "argument"
+
+
 def session_band(session: InterviewSession) -> tuple[str, str, str | None] | None:
     """Rubric band for the session's first-attempt average, or None if hidden.
 
-    Legacy sessions (postmortem status "") keep the historical behavior: every
-    graded answer counts and no coverage gate applies. New sessions exclude
-    retries and require at least BAND_MIN_COVERAGE of first-attempt answers to
-    be scored; a missing postmortem shows no band at all.
+    The band uses the session's own rubric family. Legacy sessions (postmortem
+    status "") keep the historical behavior: every graded answer counts and no
+    coverage gate applies. New sessions exclude retries and require at least
+    BAND_MIN_COVERAGE of first-attempt answers to be scored; a missing
+    postmortem shows no band at all.
     """
     postmortem = session.postmortem
     status = postmortem.status if postmortem else ""
@@ -163,7 +193,7 @@ def session_band(session: InterviewSession) -> tuple[str, str, str | None] | Non
             return None
     if not scores:
         return None
-    return rubric_band_for(int(sum(scores) / len(scores) + 0.5))
+    return rubric_band_for(int(sum(scores) / len(scores) + 0.5), rubric_family_for(session))
 
 
 def band_visible(session: InterviewSession) -> bool:
@@ -816,7 +846,7 @@ def reference_answer(
         "topic": session.topic,
         "stored_view": session.view_context[:6000],
         "candidate_answer": answer_text[:4000],
-        "target_rubric": RUBRICS["argument"][1],
+        "target_rubric": RUBRICS[rubric_family_for(session)][1],
     }
     llm = provider or default_provider()
     raw = llm.complete(
