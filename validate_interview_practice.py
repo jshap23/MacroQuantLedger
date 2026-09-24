@@ -51,8 +51,12 @@ from storage.interview_store import (
     effective_input_method,
     effective_rubric_id,
     load_database,
+    model_practice_stats,
+    performance_summary,
+    save_preferred_model,
     save_session,
     trend_eligible,
+    view_practice_stats,
 )
 
 
@@ -741,11 +745,16 @@ def test_p6_band_gate_keeps_phase1_and_hides_incomparable() -> None:
 def _answer(
     text: str = "answer", score: int | None = 7, *, is_retry: bool = False,
     tags: list[str] | None = None, status: str = "ok",
+    input_method: str = "typed", submitted_at: datetime | None = None,
 ) -> InterviewAnswer:
-    return InterviewAnswer(
+    fields = dict(
         text=text, score=score, is_retry=is_retry, failure_tags=list(tags or []),
         critique="a critique", fix="a fix", evaluation_status=status,
+        input_method=input_method,
     )
+    if submitted_at is not None:
+        fields["submitted_at"] = submitted_at
+    return InterviewAnswer(**fields)
 
 
 def _completed_session(
@@ -758,12 +767,16 @@ def _completed_session(
     style: str = "Deliver",
     rubric_id: str = "argument-v3",
     postmortem: InterviewPostmortem | None = None,
+    model: str = "test-model",
+    topic: str = "Term premium",
+    model_note_ids: list[str] | None = None,
 ) -> InterviewSession:
     return InterviewSession(
         id=session_id, mode=mode, preset_key=preset_key, rubric_id=rubric_id,
-        practice_style=style, topic="Term premium", model="test-model",
+        practice_style=style, topic=topic, model=model,
         status="completed", completed_at=datetime.now(timezone.utc),
-        view_ids=list(view_ids or []), postmortem=postmortem, questions=questions,
+        view_ids=list(view_ids or []), model_note_ids=list(model_note_ids or []),
+        postmortem=postmortem, questions=questions,
     )
 
 
@@ -1036,6 +1049,158 @@ def test_pfix_older_session_retry_keeps_latest_diagnostic() -> None:
     print("PASS: retrying an older session keeps the View's latest diagnostic")
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 batch C (Task 4): trends compare like with like.
+# ---------------------------------------------------------------------------
+
+
+def test_p15_view_stats_use_current_key_only() -> None:
+    view_id = "view-p15"
+    _patch_history_file(_temp_history_file())
+    sessions = []
+    for index in range(2):
+        session = _completed_session(
+            f"p15-legacy-{index}",
+            [InterviewQuestion(text="q", answers=[_answer(score=4 + index)])],
+            view_ids=[view_id], rubric_id="shared-v2",
+        )
+        session.completed_at = datetime(2026, 1, 1 + index, tzinfo=timezone.utc)
+        sessions.append(session)
+    for index in range(3):
+        session = _completed_session(
+            f"p15-v3-{index}",
+            [InterviewQuestion(text="q", answers=[_answer(score=6 + index)])],
+            view_ids=[view_id], rubric_id="argument-v3",
+        )
+        session.completed_at = datetime(2026, 2, 1 + index, tzinfo=timezone.utc)
+        sessions.append(session)
+    for session in sessions:
+        save_session(session)
+    stats = view_practice_stats()[view_id]
+    assert stats["other_key_sessions"] == 2
+    assert stats["current_key_sessions"] == 3
+    assert len(stats["series"]) == 3, "only the three v3 sessions form the series"
+    assert stats["latest"]["score"] == 8.0
+    print("PASS: P15 View stats use the current key only; 2 older sessions are counted separately")
+
+
+def test_p16_model_change_starts_a_new_series() -> None:
+    view_id = "view-p16"
+    _patch_history_file(_temp_history_file())
+    older = _completed_session(
+        "p16-a", [InterviewQuestion(text="q", answers=[_answer(score=9)])],
+        view_ids=[view_id], model="model-a",
+    )
+    older.completed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = _completed_session(
+        "p16-b", [InterviewQuestion(text="q", answers=[_answer(score=5)])],
+        view_ids=[view_id], model="model-b",
+    )
+    newer.completed_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    save_session(older)
+    save_session(newer)
+    stats = view_practice_stats()[view_id]
+    assert stats["current_key_sessions"] == 1
+    assert stats["other_key_sessions"] == 1
+    assert stats["latest"]["score"] == 5.0, "the latest session's model defines the series"
+    assert len(stats["series"]) == 1
+    print("PASS: P16 a model change starts a new View series")
+
+
+def test_p17_preset_change_starts_a_new_series() -> None:
+    view_id = "view-p17"
+    _patch_history_file(_temp_history_file())
+    deliver = _completed_session(
+        "p17-d", [InterviewQuestion(text="q", answers=[_answer(score=9)])],
+        view_ids=[view_id], preset_key="view_deliver", style="Deliver",
+    )
+    deliver.completed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    discuss = _completed_session(
+        "p17-c", [InterviewQuestion(text="q", answers=[_answer(score=5)])],
+        view_ids=[view_id], preset_key="view_discuss", style="Discuss",
+    )
+    discuss.completed_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    save_session(deliver)
+    save_session(discuss)
+    stats = view_practice_stats()[view_id]
+    assert stats["current_key_sessions"] == 1
+    assert stats["other_key_sessions"] == 1
+    print("PASS: P17 Deliver and Discuss sessions form separate View series")
+
+
+def test_p18_custom_and_unanchored_are_excluded() -> None:
+    view_id = "view-p18"
+    _patch_history_file(_temp_history_file())
+    save_preferred_model("test-model")
+    custom = _completed_session(
+        "p18-custom", [InterviewQuestion(text="q", answers=[_answer(score=10)])],
+        view_ids=[view_id], rubric_id="custom", model_note_ids=["note-p18"],
+    )
+    custom.completed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    unanchored = _completed_session(
+        "p18-unanchored", [InterviewQuestion(text="q", answers=[_answer(score=10)])],
+        view_ids=[view_id], rubric_id="unanchored", model_note_ids=["note-p18"],
+    )
+    unanchored.completed_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    save_session(custom)
+    save_session(unanchored)
+    assert view_practice_stats().get(view_id) is None, "custom/unanchored must not form a series"
+    summary = performance_summary()
+    assert summary["strong_topics"] == []
+    assert "Term premium" not in summary["improving"]
+    model_stats = model_practice_stats()
+    assert model_stats["note-p18"]["by_style"]["Deliver"]["avg_score"] is None
+    print("PASS: P18 custom and unanchored sessions are absent from every score number")
+
+
+def test_p19_retries_excluded_partials_included() -> None:
+    view_id = "view-p19"
+    _patch_history_file(_temp_history_file())
+    save_preferred_model("test-model")
+    session = _completed_session(
+        "p19-session",
+        [InterviewQuestion(text="q", answers=[
+            _answer(score=8, status="ok"),
+            _answer(score=6, status="partial"),
+            _answer(score=2, is_retry=True, status="partial"),
+        ])],
+        view_ids=[view_id], rubric_id="argument-v3", model_note_ids=["note-p19"],
+    )
+    save_session(session)
+    stats = view_practice_stats()[view_id]
+    assert stats["series"][-1]["score"] == 7.0, "retry excluded, partial included"
+    assert performance_summary()["strong_topics"] == ["Term premium"], "mean of 8 and 6 is 7"
+    assert model_practice_stats()["note-p19"]["by_style"]["Deliver"]["avg_score"] == 7.0
+    print("PASS: P19 retries are excluded from averages and partial answers are included")
+
+
+def test_p20_improving_uses_only_the_current_key() -> None:
+    _patch_history_file(_temp_history_file())
+    save_preferred_model("test-model")
+    questions = []
+    for index, score in enumerate([4, 5, 6, 7]):
+        questions.append(InterviewQuestion(text=f"typed {index}", answers=[
+            _answer(
+                score=score, input_method="typed",
+                submitted_at=datetime(2026, 1, 1 + index, tzinfo=timezone.utc),
+            ),
+        ]))
+    for index, score in enumerate([8, 7, 6, 5]):
+        questions.append(InterviewQuestion(text=f"voice {index}", answers=[
+            _answer(
+                score=score, input_method="voice",
+                submitted_at=datetime(2026, 2, 1 + index, tzinfo=timezone.utc),
+            ),
+        ]))
+    save_session(_completed_session("p20-session", questions, rubric_id="argument-v3"))
+    summary = performance_summary()
+    # Combined [4,5,6,7] then [8,7,6,5] would read as improving; the current key
+    # (voice) is falling, so the topic must not be flagged.
+    assert "Term premium" not in summary["improving"], \
+        "the improving flag must reflect only the current comparability key"
+    print("PASS: P20 the improving flag reflects only the current comparability key")
+
+
 def main() -> None:
     print("Validating interview practice persistence and evaluation...\n")
     _install_controller_stubs()
@@ -1075,6 +1240,12 @@ def main() -> None:
     test_p14_phase1_missing_summary_is_upgraded()
     test_pfix_empty_content_uses_repair_and_records_output()
     test_pfix_older_session_retry_keeps_latest_diagnostic()
+    test_p15_view_stats_use_current_key_only()
+    test_p16_model_change_starts_a_new_series()
+    test_p17_preset_change_starts_a_new_series()
+    test_p18_custom_and_unanchored_are_excluded()
+    test_p19_retries_excluded_partials_included()
+    test_p20_improving_uses_only_the_current_key()
     print("\nAll validation scenarios passed.")
 
 

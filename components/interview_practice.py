@@ -237,6 +237,10 @@ def _inject_css() -> None:
             white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
         }
         .ghost .vname { color:var(--text-muted); font-weight:500; }
+        .vtrend-note {
+            font-size:0.56rem; line-height:1.25; color:var(--text-faint);
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+        }
         .score {
             font-family:var(--font-data); font-size:0.86rem; font-weight:700;
             text-align:right; color:var(--text-primary); font-variant-numeric:tabular-nums;
@@ -847,14 +851,23 @@ def _session_count(count: int) -> str:
 _RUBRIC_MIN_REPS = 10
 
 
-def _rubric_reps() -> int:
-    """Completed View sessions scored under the current prompt/rubric version."""
-    return sum(
-        1 for session in load_database().sessions
-        if session.status == "completed"
-        and session.prompt_pack_version == PROMPT_PACK_VERSION
-        and session.view_ids
-    )
+def _trend_note(stats: dict) -> str:
+    """Small muted note explaining why a View's trend is or isn't comparable.
+
+    Empty when the View has a comparable baseline and no earlier,
+    differently-graded sessions.
+    """
+    if not stats:
+        return ""
+    notes = []
+    if stats.get("other_key_sessions"):
+        count = stats["other_key_sessions"]
+        notes.append(
+            f"{count} earlier session{'s' if count != 1 else ''} graded differently aren't compared."
+        )
+    if stats.get("current_key_sessions", 0) < 2:
+        notes.append("New scoring — building a baseline.")
+    return " ".join(notes)
 
 
 _REFRESH_TARGETS = (
@@ -908,11 +921,8 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
         return
     stats_by_view = view_practice_stats()
     queue = view_practice_queue(active)
-    # Latest/best are point-in-time values; movement (delta and sparkline) is
-    # suppressed until enough reps exist under the anchored rubric to be real.
-    show_movement = _rubric_reps() >= _RUBRIC_MIN_REPS
 
-    def trend_html(entry: dict) -> str:
+    def trend_html(entry: dict, show_movement: bool) -> str:
         if not show_movement:
             return '<span class="ghostline"></span>'
         series = (stats_by_view.get(entry["view"].id) or {}).get("series") or []
@@ -953,6 +963,10 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
         days = entry["days"]
         target = entry.get("target") or view_refresh_target(view.priority)
         target_word = _TARGET_WORDS.get(target, f"{target}-day")
+        # Movement (delta and sparkline) shows only once this View has enough
+        # sessions under its current comparability key to be real.
+        show_movement = stats.get("current_key_sessions", 0) >= _RUBRIC_MIN_REPS
+        note = "" if ghost else _trend_note(stats)
 
         row = ui.element("div").classes("vrow ghost" if ghost else "vrow")
         with row:
@@ -960,8 +974,13 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
             if not ghost:
                 edge.style(f"background:{staleness_color(days)}")
 
-            ui.label(view.name).classes("vname")
-            ui.html(trend_html(entry), tag="span").classes("trend")
+            with ui.element("span").classes("vname").style(
+                "display:flex;flex-direction:column;min-width:0;line-height:1.2;"
+            ):
+                ui.label(view.name).style("overflow:hidden;text-overflow:ellipsis;")
+                if note:
+                    ui.label(note).classes("vtrend-note")
+            ui.html(trend_html(entry, show_movement), tag="span").classes("trend")
 
             if ghost or latest is None:
                 ui.html("—", tag="span").classes("score dim")

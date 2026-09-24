@@ -161,33 +161,30 @@ def save_preferred_model(model: str) -> None:
         save_database(database)
 
 
-def _same_model_runs(runs: list[tuple[str, int]]) -> list[list[tuple[str, int]]]:
-    """Split a chronological (model, score) series wherever the model changes.
-
-    Scores are only comparable within a single grader, so a model switch starts
-    a new run that must not be averaged against the previous one.
-    """
-    segments: list[list[tuple[str, int]]] = []
-    current: list[tuple[str, int]] = []
-    for model, score in runs:
-        if current and model != current[-1][0]:
-            segments.append(current)
-            current = []
-        current.append((model, score))
-    if current:
-        segments.append(current)
-    return segments
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalize a possibly-naive datetime to aware UTC for comparison."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def performance_summary() -> dict:
-    sessions = load_database().sessions
+    database = load_database()
+    sessions = database.sessions
+    # The selected grader. Scores are only comparable within one grader, so
+    # score numbers count a session only when it used this model.
+    current_grader = database.preferred_model
     completed = [s for s in sessions if s.status == "completed"]
     answered_questions = [q for s in sessions for q in s.questions if q.answers]
     answers = [a for q in answered_questions for a in q.answers]
+    # Failure tags are hints for the next prompt, not displayed scores, so they
+    # may still come from every session.
     tags = Counter(tag for answer in answers for tag in answer.failure_tags)
     weak_topics: Counter[str] = Counter()
     topic_scores: dict[str, list[int]] = defaultdict(list)
-    topic_runs: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    topic_runs: dict[str, list[tuple[str, datetime, int]]] = defaultdict(list)
     due: list[dict] = []
     review_concepts: list[dict] = []
     topic_last: dict[str, date] = {}
@@ -201,12 +198,6 @@ def performance_summary() -> dict:
         for question in session.questions:
             question_topic = question.topic or session.topic
             topic_last[question_topic] = max(session_day, topic_last.get(question_topic, session_day))
-            scores = [a.score for a in question.answers if a.score is not None]
-            if scores:
-                topic_scores[question_topic].extend(scores)
-                topic_runs[question_topic].extend(
-                    (session.model or "", score) for score in scores
-                )
             if question.should_return:
                 weak_topics[question_topic] += 1
                 review_concepts.append({
@@ -220,16 +211,30 @@ def performance_summary() -> dict:
                         "topic": question_topic,
                         "priority": question.review_priority,
                     })
+            # Score numbers count only a current rubric family graded by the
+            # selected model, from trend_eligible() answers (scored, not retry).
+            if not current_grader or session.model != current_grader:
+                continue
+            if not effective_rubric_id(session).endswith("-v3"):
+                continue
+            for answer in question.answers:
+                if not trend_eligible(session, answer):
+                    continue
+                topic_scores[question_topic].append(answer.score)
+                topic_runs[question_topic].append(
+                    (comparability_key(session, answer), answer.submitted_at, answer.score)
+                )
 
     improving: list[str] = []
     for topic, runs in topic_runs.items():
-        # Only the most recent unbroken same-model run is comparable. An older
-        # grader's run must not flag a topic after the model changed, and scores
-        # from different models are never averaged together.
-        segments = _same_model_runs(runs)
-        if not segments:
-            continue
-        scores = [score for _, score in segments[-1]]
+        # Only the topic's most recent comparability key is comparable; an older
+        # rubric, grader, preset, or input method must not flag the topic.
+        ordered = sorted(
+            runs,
+            key=lambda run: _as_utc(run[1]) or datetime.min.replace(tzinfo=timezone.utc),
+        )
+        current_key = ordered[-1][0]
+        scores = [score for key, _, score in ordered if key == current_key]
         if len(scores) < 4:
             continue
         split = max(1, len(scores) // 2)
@@ -403,17 +408,29 @@ def practice_pulse(window: int = 20, limit: int = 200) -> dict:
 
 
 def model_practice_stats() -> dict[str, dict]:
-    """Per-note practice history for model-note practice sessions."""
+    """Per-note practice history for model-note practice sessions.
+
+    Session counts and recency include every note session; score averages count
+    only comparable answers — a current rubric family graded by the selected
+    model, from trend_eligible() answers (scored, not retry).
+    """
+    database = load_database()
+    current_grader = database.preferred_model
     notes: dict[str, dict] = {}
-    for session in load_database().sessions:
+    for session in database.sessions:
         if not session.model_note_ids:
             continue
         session_day = session.started_at.date()
+        comparable = (
+            bool(current_grader)
+            and session.model == current_grader
+            and effective_rubric_id(session).endswith("-v3")
+        )
         scores = [
             answer.score
             for question in session.questions
             for answer in question.answers
-            if answer.score is not None
+            if comparable and trend_eligible(session, answer)
         ]
         for note_id in session.model_note_ids:
             note = notes.setdefault(note_id, {"last": None, "sessions": 0, "styles": {}})
@@ -448,57 +465,70 @@ def model_practice_stats() -> dict[str, dict]:
 
 
 def view_practice_stats(window_days: int = 182) -> dict[str, dict]:
-    """Per-View scored-practice history derived from completed View sessions."""
+    """Per-View scored-practice history, compared only within one key.
+
+    A View's series, latest, previous, best, and deltas come only from sessions
+    sharing the comparability key of its most recent eligible session (rubric,
+    grader model, preset, input method). Sessions under any other key are counted
+    as ``other_key_sessions`` and never averaged into the series. Only
+    trend_eligible() answers count, so retries are excluded and ``partial``
+    answers (which have scores) are included.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-    views: dict[str, list[tuple[datetime, date, float | None, str]]] = {}
+    per_view: dict[str, list[dict]] = {}
     for session in load_database().sessions:
         if session.status != "completed" or not session.view_ids or session.completed_at is None:
             continue
-        completed = session.completed_at
-        if completed.tzinfo is None:
-            completed = completed.replace(tzinfo=timezone.utc)
-        scores = [
-            answer.score
+        eligible = [
+            answer
             for question in session.questions
             for answer in question.answers
-            if answer.score is not None and not answer.is_retry
+            if trend_eligible(session, answer)
         ]
-        run_score = round(sum(scores) / len(scores), 1) if scores else None
+        if not eligible:
+            continue
+        completed = _as_utc(session.completed_at)
+        scores = [answer.score for answer in eligible]
+        key = comparability_key(session, eligible[0])
+        run = {
+            "completed": completed,
+            "date": completed.date(),
+            "score": round(sum(scores) / len(scores), 1),
+            "key": key,
+        }
         for view_id in session.view_ids:
-            views.setdefault(view_id, []).append(
-                (completed, completed.date(), run_score, session.model or "")
-            )
+            per_view.setdefault(view_id, []).append(run)
 
     stats: dict[str, dict] = {}
-    for view_id, all_runs in views.items():
-        ordered = sorted(all_runs, key=lambda run: run[0])
-        # Use only the most recent unbroken run from a single grader. A model
-        # change resets the series instead of mixing incomparable scores.
-        current_model = ordered[-1][3]
-        runs = []
-        for run in reversed(ordered):
-            if run[3] != current_model:
-                break
-            runs.append(run)
-        runs.reverse()
+    for view_id, all_runs in per_view.items():
+        ordered = sorted(all_runs, key=lambda run: run["completed"])
+        # Only the most recent key defines the series; older keys are counted
+        # separately instead of mixing incomparable scores.
+        current_key = ordered[-1]["key"]
+        runs = [run for run in ordered if run["key"] == current_key]
+        other_key_sessions = len(ordered) - len(runs)
         scored_all = sorted(
-            (run for run in runs if run[2] is not None),
-            key=lambda run: run[0],
+            (run for run in runs if run["score"] is not None),
+            key=lambda run: run["completed"],
         )
         latest = scored_all[-1] if scored_all else None
         previous = scored_all[-2] if len(scored_all) >= 2 else None
-        window_runs = [run for run in runs if run[0] >= cutoff]
-        window_scored = [run for run in window_runs if run[2] is not None]
-        best = max(window_scored, key=lambda run: run[2]) if window_scored else None
-        latest_score = latest[2] if latest else None
-        best_score = best[2] if best else None
-        previous_score = previous[2] if previous else None
+        window_runs = [run for run in runs if run["completed"] >= cutoff]
+        window_scored = [run for run in window_runs if run["score"] is not None]
+        best = max(window_scored, key=lambda run: run["score"]) if window_scored else None
+        latest_score = latest["score"] if latest else None
+        best_score = best["score"] if best else None
+        previous_score = previous["score"] if previous else None
         stats[view_id] = {
-            "latest": {"score": latest_score, "date": latest[1]} if latest else None,
-            "previous": {"score": previous_score, "date": previous[1]} if previous else None,
-            "best": {"score": best_score, "date": best[1]} if best else None,
+            "latest": {"score": latest_score, "date": latest["date"]} if latest else None,
+            "previous": {"score": previous_score, "date": previous["date"]} if previous else None,
+            "best": {"score": best_score, "date": best["date"]} if best else None,
             "runs_6mo": len(window_runs),
             "scored_runs": len(window_scored),
+            # All eligible sessions under the current key (the 10-rep
+            # suppression count) and under any other key (never compared).
+            "current_key_sessions": len(runs),
+            "other_key_sessions": other_key_sessions,
             "delta_vs_best": (
                 round(latest_score - best_score, 1)
                 if latest_score is not None and best_score is not None else None
@@ -509,7 +539,7 @@ def view_practice_stats(window_days: int = 182) -> dict[str, dict]:
             ),
             # Most recent scored runs only, oldest first, for trend display.
             "series": [
-                {"score": run[2], "date": run[1]} for run in scored_all[-12:]
+                {"score": run["score"], "date": run["date"]} for run in scored_all[-12:]
             ],
         }
     return stats
