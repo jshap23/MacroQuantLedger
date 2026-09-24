@@ -67,22 +67,21 @@ All component CSS must follow this pattern. Current IDs in use:
 
 **MacroQuantLedger** is a local single-page dashboard for macro-quant research tracking. It uses [NiceGUI](https://nicegui.io/) (Python → Vue.js/Quasar) for the web UI, Pydantic v2 for data models, and JSON for persistence.
 
-### Tabs (5 primary tabs + secondary tabs)
+### Tabs (4 primary tabs + secondary tabs)
 
-1. **Today** — Landing dashboard: greeting, "Top of Mind" strip, desk-status metric cards
-2. **Views**
-   - **My Views** — Living rolodex of structured arguments (TopicViews)
+1. **Views** (landing tab)
+   - **My Views** — Living rolodex of structured arguments (TopicViews); the "Top of Mind" strip sits at the top of the page
    - **Macro** — 7 fixed macro themes with direction badges and conviction bars
    - **Assets** — 13 asset scores (1-5) with tenure tracking
    - **Trades** — ETF position tracker with P&L
-3. **Research**
+2. **Research**
    - **Economic Data** — FRED indicators with charts (requires `FRED_API_KEY`)
    - **Fed Watch** — FOMC statements, minutes, and speeches reader with LLM summaries
    - **Papers** — Research paper feed (FEDS, FEDS Notes, IFDP, arXiv q-fin) with read tracking
-4. **Review**
+3. **Review**
    - **Weekly Review** — Time allocation and synthesis log
    - **Attribution** — View-vs-returns analysis with echarts
-5. **Practice** — Interview practice with typed or voice answers, optional OpenRouter TTS question playback, and scoring. The landing page leads with **My Views** quick-start, then the **QUANT PRACTICE** card: model-note modes (Explain / Defend / Compare / Deep Dive) backed by a read-only Obsidian Models library, plus Quant Fundamentals and an Advanced Setup fallback
+4. **Practice** — Interview practice with typed or voice answers, optional OpenRouter TTS question playback, and scoring. The landing page leads with **My Views** quick-start, then the **QUANT PRACTICE** card: model-note modes (Explain / Defend / Compare / Deep Dive) backed by a read-only Obsidian Models library, plus Quant Fundamentals and an Advanced Setup fallback
 
 ### Data Flow
 
@@ -95,7 +94,7 @@ All component CSS must follow this pattern. Current IDs in use:
 
 | Module | Role |
 |---|---|
-| `app.py` | Entry point, MQ monogram header, global CSS theming (dark/light), 5-tab + secondary-tab routing, import/export/reset/settings dialogs |
+| `app.py` | Entry point, MQ monogram header, global CSS theming (dark/light), 4-tab + secondary-tab routing, import/export/reset/settings dialogs |
 | `config.py` | LLM provider defaults (OpenRouter and OpenCode Go), chat and Practice-TTS model slugs, max tokens, temperature; plus Obsidian default paths and interview fallback notes |
 | `models/schema.py` | Pydantic v2 models: `AppState`, `MacroView`, `AssetView`, `Reconciliation`, `BriefingStrip`, `Trade`, plus `TopicView`, `ViewPoint`, `ViewFact`, `ViewPracticeMeta` |
 | `models/interview.py` | Interview-practice models: `InterviewSession`, `InterviewQuestion`, `InterviewAnswer`, `InterviewPostmortem`, `InterviewDatabase` (`InterviewSession` also carries `model_note_ids`/`model_note_titles`/`model_context` for My Models sessions) |
@@ -121,11 +120,10 @@ All component CSS must follow this pattern. Current IDs in use:
 | `services/interview_tts.py` | OpenRouter TTS proxy + `/api/interview/tts` route; per-model voice/capability mapping, safe voice fallback, and Gemini PCM-to-MP3 conversion |
 | `setup_speech_runtime.py` | One-time installer for the isolated NumPy runtime used by whisper |
 | `components/status_bar.py` | Summary staleness indicator ("X current / Y need review" + weekly review age) |
-| `components/today.py` | Today tab dashboard |
 | `components/macro_views.py` | 7 fixed macro view rows — side-drawer editor, conviction bars, direction badges |
 | `components/asset_views.py` | Asset Class Views tab — score grid + conviction tenure table |
 | `components/topic_views.py` | My Views tab — TopicView rolodex, editor, AI assists |
-| `components/briefing_strip.py` | "Top of Mind" textarea (rendered inside the Today tab) |
+| `components/briefing_strip.py` | "Top of Mind" textarea (rendered at the top of the My Views page) |
 | `components/briefing.py` | Morning Briefing tab — LLM generation or template fallback |
 | `components/reconciliation.py` | Weekly reconciliation form + history log (capped at 52) + quant focus inputs |
 | `components/fred_panel.py` | FRED economic data — HTML tables with click-to-chart (echarts) |
@@ -313,6 +311,7 @@ data/
 ### Deprecated / Removed
 
 - **Bull/Bear icons** — No longer rendered in the UI. The `_BULL_SVG` and `_BEAR_SVG` constants still exist in `app.py` as unused dead code.
+- **Today tab** — Removed; the app opens on Views → My Views, and the "Top of Mind" strip now sits at the top of My Views (`render_briefing_strip(..., compact=True)` in `components/topic_views.py`). The strip's `.today-top-of-mind*` CSS classes keep their historic names.
 - **Subtitle** — "view inventory · quant tracker · reconciliation" removed. Replaced with live clock.
 - `ui.add_css()` — **Never use.** Use `ui.add_head_html('<style id="...">...</style>')` instead.
 - **`SPEC.md`** — Removed entirely. Any reference to it as authoritative is stale.
@@ -320,5 +319,5 @@ data/
 ### Documentation Notes
 
 - **`CLAUDE.md` is now stale.** It still describes a 6-tab layout, 15 asset views, a hardcoded Obsidian path, and `SPEC.md` as authoritative. Do not trust it for current structure.
-- **`check_syntax.py` checks 45 files** (41 before My Models / `storage/model_library.py` were added).
+- **`check_syntax.py` checks 44 files** (40 before My Models / `storage/model_library.py` were added).
 - **Trust actual source code** over any markdown documentation.

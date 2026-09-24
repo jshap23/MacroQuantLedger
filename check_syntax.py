@@ -22,7 +22,6 @@ files = [
     'services/interview_controller.py',
     'services/topic_views.py',
     'components/status_bar.py',
-    'components/today.py',
     'components/macro_views.py',
     'components/asset_views.py',
     'components/briefing_strip.py',

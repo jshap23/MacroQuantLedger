@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from nicegui import run, ui
 
 from models.schema import AppState, TopicView, ViewFact, ViewPoint
+from components.briefing_strip import render_briefing_strip
 from services.topic_views import touch
 from storage.persistence import save_state
 from storage.topic_view_sync import apply_sync_plan, plan_sync, sync_is_enabled
@@ -124,7 +125,7 @@ def render_topic_views(state: AppState, save_indicator, practice_view, open_brid
             if view:
                 _detail(view, state, local, persist, refresh, practice_view)
             else:
-                _overview(state, local, persist, refresh)
+                _overview(state, local, persist, refresh, save_indicator)
 
     if open_bridge is not None:
         open_bridge["open"] = lambda view_id: (local.update(selected=view_id), refresh())
@@ -326,7 +327,11 @@ def _toggle_tag_filter(local: dict, tag: str, refresh) -> None:
     refresh()
 
 
-def _overview(state: AppState, local: dict, persist, refresh) -> None:
+def _overview(state: AppState, local: dict, persist, refresh, save_indicator) -> None:
+    # Top of Mind lives at the top of My Views; it saves through the app-level
+    # save_indicator so the save status and staleness label behave as on Today.
+    render_briefing_strip(state, save_indicator, compact=True)
+
     with ui.row().style("width:100%;justify-content:space-between;align-items:flex-start;gap:.75rem;flex-wrap:wrap"):
         with ui.column().style("gap:.15rem"):
             ui.label("MY VIEWS").classes("section-header")

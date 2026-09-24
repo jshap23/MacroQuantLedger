@@ -14,7 +14,6 @@ from components.trades import render_trades
 from components.attribution import render_attribution
 from components.interview_practice import render_interview_practice
 from components.topic_views import render_topic_views
-from components.today import render_today
 from export.excel import generate_excel
 from storage.user_settings import (
     load_user_settings,
@@ -438,44 +437,7 @@ body.light-mode .live-dot {
     }
 }
 
-/* ── Today ── */
-.today-hero {
-    width:100%; padding:0.7rem 0; margin-bottom:0.6rem;
-    display:flex; align-items:center; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;
-}
-.today-eyebrow {
-    color:var(--accent) !important; font-family:var(--font-data) !important;
-    font-size:0.62rem; font-weight:700; letter-spacing:0.12em; text-transform:uppercase;
-}
-.today-title {
-    color:var(--text-primary) !important; font-size:1rem;
-    font-weight:700; letter-spacing:-0.015em; margin-top:0.1rem;
-}
-.today-copy {
-    color:var(--text-muted) !important; font-size:0.88rem; line-height:1.6;
-    max-width:720px; margin-top:0.35rem;
-}
-.today-metric-grid {
-    display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0.5rem; width:100%;
-}
-.today-metric-card {
-    appearance:none; text-align:left; width:100%; min-height:86px; padding:0.65rem 0.75rem;
-    color:var(--text-primary); background:var(--bg-card); border:1px solid var(--border);
-    border-radius:8px; cursor:pointer; transition:transform .15s,border-color .15s,box-shadow .15s;
-}
-.today-metric-card:hover {
-    transform:translateY(-2px); border-color:var(--accent);
-    box-shadow:0 8px 24px var(--accent-glow);
-}
-.today-metric-topline { display:flex; align-items:flex-start; justify-content:space-between; }
-.today-metric-value {
-    color:var(--text-primary) !important; font:700 1.15rem var(--font-data) !important;
-}
-.today-metric-arrow { color:var(--text-faint) !important; transition:color .15s,transform .15s; }
-.today-metric-card:hover .today-metric-arrow { color:var(--accent) !important; transform:translateX(2px); }
-.today-metric-label { color:var(--text-primary) !important; font-size:0.72rem; font-weight:600; margin-top:0.28rem; }
-.today-metric-detail { color:var(--text-muted) !important; font-size:0.64rem; margin-top:0.1rem; }
-.today-actions { gap:0.55rem; margin:0; flex-wrap:wrap; }
+/* ── Top of Mind strip ── */
 .today-top-of-mind { width:100%; display:flex; align-items:flex-start; gap:0.65rem; padding:0.45rem 0.55rem; margin-bottom:0.45rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); }
 .today-top-of-mind-label { color:var(--accent) !important; font:700 0.6rem var(--font-data) !important; letter-spacing:0.12em; padding-top:0.45rem; }
 .today-top-of-mind-input { flex:1; min-width:0; }
@@ -614,12 +576,7 @@ body.light-mode .q-select__dropdown-icon { color: var(--text-muted) !important; 
         letter-spacing: 0.04em !important;
         padding: 0 0.5rem !important;
     }
-    .today-metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 
-}
-
-@media (min-width:641px) and (max-width:980px) {
-    .today-metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 """
 
@@ -653,7 +610,7 @@ def index():
     saved_ref = {"el": None}
     status_container = {"el": None}
     navigation = {"primary": {}, "secondary": {}}
-    practice_bridge = {"open": None, "surprise": None}
+    practice_bridge = {"open": None}
     views_bridge = {"open": None}
 
     def navigate(section: str, destination: str | None = None):
@@ -671,13 +628,6 @@ def index():
         if opener:
             opener(view_ids, style)
         navigate("practice")
-        ui.run_javascript("window.scrollTo({top:0,behavior:'smooth'})")
-
-    async def practice_surprise():
-        opener = practice_bridge.get("surprise")
-        navigate("practice")
-        if opener:
-            await opener()
         ui.run_javascript("window.scrollTo({top:0,behavior:'smooth'})")
 
     def review_view(view_id):
@@ -1057,7 +1007,6 @@ def index():
     asyncio.ensure_future(_load_fred())
 
     with ui.tabs().props('align="left" mobile-arrows outside-arrows').classes("w-full") as tabs:
-        tab_today = ui.tab("Today")
         tab_views = ui.tab("Views")
         tab_research = ui.tab("Research")
         tab_review = ui.tab("Review")
@@ -1065,17 +1014,13 @@ def index():
 
     navigation["tabs"] = tabs
     navigation["primary"].update({
-        "today": tab_today,
         "views": tab_views,
         "research": tab_research,
         "review": tab_review,
         "practice": tab_interview,
     })
 
-    with ui.tab_panels(tabs, value=tab_today).classes("w-full"):
-        with ui.tab_panel(tab_today):
-            render_today(s, save_indicator, navigate, practice_surprise)
-
+    with ui.tab_panels(tabs, value=tab_views).classes("w-full"):
         with ui.tab_panel(tab_views):
             with ui.tabs().props('align="left"').classes("secondary-tabs w-full") as views_tabs:
                 view_topics = ui.tab("My Views")
