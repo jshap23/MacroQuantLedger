@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import random
 from collections import Counter, deque
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 
 from nicegui import run, ui
@@ -30,7 +30,7 @@ from components.interview_speech import (
 from components.interview_tts import speak_question, stop_speaking
 from components.status_bar import days_since, staleness_color, staleness_label
 from storage.interview_store import (
-    InterviewHistoryUnreadable, load_database, model_practice_stats, performance_summary,
+    InterviewHistoryUnreadable, load_database, model_practice_stats,
     practice_pulse, preferred_model, recent_answers, save_preferred_model,
     trend_session_count, view_practice_queue, view_practice_stats, view_refresh_target,
 )
@@ -411,39 +411,11 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
     refresh()
 
 
-def _cold_topics(app_state, days: int = 14, limit: int = 2) -> list[str]:
-    """Active Views last practiced more than ``days`` ago, coldest first."""
-    if app_state is None:
-        return []
-    now = datetime.now(timezone.utc)
-    cold: list[tuple[datetime, str]] = []
-    for view in app_state.topic_views:
-        if view.archived or view.practice.last_practiced is None:
-            continue
-        last = view.practice.last_practiced
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        if (now - last).days > days:
-            cold.append((last, view.name))
-    cold.sort()
-    return [name for _, name in cold[:limit]]
-
-
-def _render_practice_pulse(app_state) -> None:
-    """One dimmed, forward-looking line; omits empty signals and all-empty."""
-    pulse = practice_pulse()
-    segments: list[str] = []
-    if pulse["most_persistent"]:
-        segments.append(f"Most persistent: {pulse['most_persistent']}")
-    if pulse["reps_this_week"]:
-        segments.append(f"{pulse['reps_this_week']} reps this week")
-    if pulse["not_flagged"]:
-        segments.append("Not flagged lately: " + ", ".join(pulse["not_flagged"][:2]))
-    cold = _cold_topics(app_state)
-    if cold:
-        segments.append("Cold 14+ days: " + ", ".join(cold))
-    if segments:
-        ui.label(" · ".join(segments)).classes("interview-meta").style(
+def _render_practice_pulse() -> None:
+    """One dimmed line under the header, and only when there is a count."""
+    reps = practice_pulse()["reps_this_week"]
+    if reps:
+        ui.label(f"{reps} reps this week").classes("interview-meta").style(
             "margin:0.1rem 0 0.6rem;"
         )
 
@@ -509,7 +481,6 @@ def _render_unfinished(active, state: dict, refresh) -> None:
 
 
 def _render_home(state: dict, refresh, app_state=None) -> None:
-    summary = performance_summary()
     active_views = [view for view in (app_state.topic_views if app_state else []) if not view.archived]
     active = next(
         (s for s in load_database().sessions if s.status == "active" and s.questions), None
@@ -528,7 +499,7 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
             icon="shuffle" if active_views else "psychology",
         ).classes("submit-btn")
 
-    _render_practice_pulse(app_state)
+    _render_practice_pulse()
 
     def weakness_setup() -> None:
         _open_short_setup(state, refresh, "weaknesses")
@@ -588,7 +559,6 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
 
     if state["selected_preset"]:
         _render_setup(state, refresh)
-    _render_performance(summary)
 
 
 async def _launch_quant_fundamentals(
@@ -2538,30 +2508,3 @@ def _postmortem_list(title: str, items: list[str]) -> None:
     ui.label(title).classes("section-header").style("margin-top:1rem;")
     for item in items:
         ui.label(f"• {item}").classes("pm-body")
-
-
-def _render_performance(summary: dict) -> None:
-    with ui.element("div").classes("interview-card"):
-        ui.label("PERFORMANCE").classes("interview-kicker")
-        tag_total = summary["tag_total"] or 1
-        if summary["tag_counts"]:
-            ui.label("MOST COMMON ISSUES").classes("field-label")
-            for tag, count in summary["tag_counts"].most_common(5):
-                ui.label(f"{tag:<24} {count / tag_total:>5.0%}").classes("interview-list-item")
-        else:
-            ui.label("Complete a session to see your practice insights.").classes("interview-list-item")
-
-        with ui.row().style("gap:2rem; width:100%; flex-wrap:wrap; margin-top:0.6rem;"):
-            with ui.column().style("gap:0; flex:1; min-width:220px;"):
-                ui.label("IMPROVING").classes("field-label")
-                for topic in summary["improving"] or ["Not enough history yet"]:
-                    ui.label(topic).classes("interview-list-item")
-            with ui.column().style("gap:0; flex:1; min-width:220px;"):
-                ui.label("NEEDS WORK").classes("field-label")
-                topics = [topic for topic, _ in summary["weak_topics"].most_common(5)]
-                for topic in topics or ["No recurring weak topics yet"]:
-                    ui.label(topic).classes("interview-list-item")
-            with ui.column().style("gap:0; flex:1; min-width:220px;"):
-                ui.label("DUE FOR REVIEW").classes("field-label")
-                for item in summary["due"][:5] or [{"concept": "Nothing due"}]:
-                    ui.label(item["concept"]).classes("interview-list-item")
