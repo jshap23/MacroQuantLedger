@@ -42,6 +42,7 @@ files = [
     'storage/topic_view_markdown.py',
     'storage/topic_view_sync.py',
     'validate_topic_view_sync.py',
+    'validate_interview_practice.py',
     'setup_speech_runtime.py',
     'launch.py',
 ]

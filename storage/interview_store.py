@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
+
+from pydantic import ValidationError
 
 from models.interview import InterviewDatabase, InterviewSession
 from models.schema import TopicView
@@ -15,12 +18,58 @@ INTERVIEW_FILE = Path(__file__).resolve().parent.parent / "data" / "interview_hi
 _LOCK = RLock()
 
 
+class InterviewHistoryUnreadable(RuntimeError):
+    """The history file exists but could not be parsed.
+
+    Raised instead of returning an empty database so a corrupt or
+    schema-invalid file is never silently replaced by the next save.
+    """
+
+    def __init__(self, source: Path, backup: Path):
+        self.source = source
+        self.backup = backup
+        super().__init__(
+            f"Interview history at {source} could not be read; "
+            f"an untouched copy was saved to {backup}."
+        )
+
+
+def _backup_unreadable_history() -> Path:
+    """Copy the unreadable history aside, reusing an identical existing backup.
+
+    Backups are named with a timestamp so lexicographic order is chronological.
+    A repeated read of the same unreadable file must not litter the folder, so
+    the newest backup is reused when it is byte-identical to the current file.
+    """
+    backup_dir = INTERVIEW_FILE.parent / "backups"
+    existing = sorted(backup_dir.glob("interview_history_unreadable_*.json"))
+    if existing:
+        newest = existing[-1]
+        if newest.read_bytes() == INTERVIEW_FILE.read_bytes():
+            return newest
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"interview_history_unreadable_{stamp}.json"
+    shutil.copy2(INTERVIEW_FILE, backup)
+    return backup
+
+
 def load_database() -> InterviewDatabase:
     with _LOCK:
         try:
-            return InterviewDatabase.model_validate_json(INTERVIEW_FILE.read_text(encoding="utf-8"))
-        except (FileNotFoundError, ValueError, json.JSONDecodeError):
+            raw = INTERVIEW_FILE.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return InterviewDatabase()
+        except UnicodeDecodeError as exc:
+            # A file that cannot even be decoded is still user data: back it up
+            # and surface it rather than returning an empty database.
+            backup = _backup_unreadable_history()
+            raise InterviewHistoryUnreadable(INTERVIEW_FILE, backup) from exc
+        try:
+            return InterviewDatabase.model_validate_json(raw)
+        except (json.JSONDecodeError, ValidationError) as exc:
+            backup = _backup_unreadable_history()
+            raise InterviewHistoryUnreadable(INTERVIEW_FILE, backup) from exc
 
 
 def save_database(database: InterviewDatabase) -> None:

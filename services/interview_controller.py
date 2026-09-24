@@ -4,15 +4,30 @@ import json
 import re
 from datetime import datetime, timezone
 
+from pydantic import BaseModel, Field, model_validator
+
 from models.interview import InterviewAnswer, InterviewPostmortem, InterviewQuestion, InterviewSession
 from services.interview_llm import (
-    CompletionOptions, FAILURE_TAGS, LLMProvider, default_provider,
-    interview_model, parse_json_response,
+    CompletionOptions, FAILURE_TAGS, LLMProvider, InterviewOutputError,
+    default_provider, interview_model, parse_json_response,
 )
 from services.interview_prompts import (
     PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
 )
 from storage.interview_store import get_session, mark_review, save_session, weakness_context
+
+
+# Per-turn token budgets. A first failure is often truncation, so the single
+# repair retry gets REPAIR_TOKEN_FACTOR times the first call's budget.
+EVAL_MAX_TOKENS = 450
+EVAL_FINAL_MAX_TOKENS = 900
+REPAIR_TOKEN_FACTOR = 1.5
+QUESTION_RECOVERY_MAX_TOKENS = 100
+# Used when the turn's single repair is already spent and the model still did
+# not return a next question. Never triggers a third call.
+FALLBACK_FOLLOW_UP = (
+    "Take that one level deeper: what is the mechanism, and what evidence supports it?"
+)
 
 
 # Anchored scoring rubric for the shared 1-10 score field. Kept as one constant
@@ -82,6 +97,34 @@ def rubric_band_for(score: int | None) -> tuple[str, str, str | None] | None:
     return None
 
 
+BAND_MIN_COVERAGE = 0.75
+
+
+def session_band(session: InterviewSession) -> tuple[str, str, str | None] | None:
+    """Rubric band for the session's first-attempt average, or None if hidden.
+
+    Legacy sessions (postmortem status "") keep the historical behavior: every
+    graded answer counts and no coverage gate applies. New sessions exclude
+    retries and require at least BAND_MIN_COVERAGE of first-attempt answers to
+    be scored; a missing postmortem shows no band at all.
+    """
+    postmortem = session.postmortem
+    status = postmortem.status if postmortem else ""
+    if status == "missing":
+        return None
+    answers = [answer for question in session.questions for answer in question.answers]
+    if status == "":
+        scores = [answer.score for answer in answers if answer.score is not None]
+    else:
+        first_attempts = [answer for answer in answers if not answer.is_retry]
+        scores = [answer.score for answer in first_attempts if answer.score is not None]
+        if not first_attempts or len(scores) / len(first_attempts) < BAND_MIN_COVERAGE:
+            return None
+    if not scores:
+        return None
+    return rubric_band_for(int(sum(scores) / len(scores) + 0.5))
+
+
 def _system(
     session: InterviewSession, current_session_state: str, transcript_note: bool = False,
 ) -> str:
@@ -99,7 +142,7 @@ def _system(
     )
 
 
-def _question(data: dict, fallback_topic: str) -> InterviewQuestion:
+def _question_text(data: dict) -> str:
     """Normalize the common question shapes returned by compatible models."""
     value = (
         data.get("question") or data.get("next_question") or data.get("nextQuestion")
@@ -107,7 +150,12 @@ def _question(data: dict, fallback_topic: str) -> InterviewQuestion:
     )
     if isinstance(value, dict):
         value = value.get("text") or value.get("question") or value.get("content") or ""
-    text = str(value).strip()
+    return str(value).strip()
+
+
+def _question(data: dict, fallback_topic: str) -> InterviewQuestion:
+    """Normalize the common question shapes returned by compatible models."""
+    text = _question_text(data)
     if not text:
         raise RuntimeError("The interview model did not return a question.")
     return InterviewQuestion(
@@ -136,14 +184,6 @@ def _opening_question(session: InterviewSession) -> str:
     if session.preset_key == "model_deep_dive":
         return f"What exactly is {topic} optimizing?"
     return f"What's your view on {topic}?"
-
-
-def _has_question(data: dict, fallback_topic: str) -> bool:
-    try:
-        _question(data, fallback_topic)
-        return True
-    except RuntimeError:
-        return False
 
 
 def start_session(
@@ -219,16 +259,121 @@ def _compact_critique(value) -> str:
     return " ".join(words[:60])
 
 
+def _text_value(value) -> str:
+    """Flatten a model field that may be a string, number, or list."""
+    if isinstance(value, list):
+        return " ".join(str(item) for item in value)
+    return "" if value is None else str(value)
+
+
+def _compact_fix(value) -> str:
+    """One concrete fix: a single sentence, trimmed to at most 40 words.
+
+    The sentence cut only fires on punctuation followed by whitespace or the
+    end, so decimals like "1.5%" are not mistaken for a sentence break.
+    """
+    text = " ".join(_text_value(value).split())
+    for index, char in enumerate(text):
+        if char in ".!?" and (index + 1 == len(text) or text[index + 1].isspace()):
+            text = text[:index + 1]
+            break
+    return " ".join(text.split()[:40])
+
+
+_SCORE_PATTERN = re.compile(r"^(-?\d+(?:\.\d+)?)\s*(?:/\s*(\d+(?:\.\d+)?))?$")
+
+
+def _parse_score(value) -> int | None:
+    """Accept 7, 7.0, "7", or "7/10"; clamp to 1-10; otherwise None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        match = _SCORE_PATTERN.match(value.strip())
+        if not match:
+            return None
+        number = float(match.group(1))
+        if match.group(2):
+            denominator = float(match.group(2))
+            if denominator <= 0:
+                return None
+            number = number / denominator * 10
+    else:
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return max(1, min(10, int(number + 0.5)))
+
+
+class TurnEvaluation(BaseModel):
+    """One validated turn of private evaluation fields.
+
+    Parsing never raises for a bad field: an unusable field normalizes to its
+    empty value so the caller can decide whether to repair the turn or save a
+    partial. ``status`` is the storage classification the answer records.
+    """
+
+    score: int | None = None
+    failure_tags: list[str] = Field(default_factory=list)
+    critique: str = ""
+    fix: str = ""
+    next_question: str = ""
+    next_topic: str = ""
+    concept: str = ""
+    difficulty: str | None = None
+    materially_weak: bool = False
+    done: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize(cls, data):
+        if not isinstance(data, dict):
+            return {"score": None}
+        raw_tags = data.get("failure_tags")
+        tags = (
+            [str(tag) for tag in raw_tags if str(tag) in FAILURE_TAGS][:3]
+            if isinstance(raw_tags, list) else []
+        )
+        return {
+            "score": _parse_score(data.get("score")),
+            "failure_tags": tags,
+            "critique": _compact_critique(_text_value(data.get("critique"))),
+            "fix": _compact_fix(data.get("fix")),
+            "next_question": _question_text(data),
+            "next_topic": str(data.get("next_topic") or "").strip(),
+            "concept": str(data.get("concept") or "").strip(),
+            "difficulty": str(data.get("difficulty") or "").strip() or None,
+            "materially_weak": bool(data.get("materially_weak")),
+            "done": bool(data.get("done")),
+        }
+
+    @property
+    def status(self) -> str:
+        """``ok`` when score, critique, and fix are all present; else ``partial``."""
+        if self.score is None:
+            return "invalid"
+        return "ok" if self.critique and self.fix else "partial"
+
+
 def _evaluation_schema(final_turn: bool) -> dict:
     """Keep ordinary turns compact; postmortems belong only to the final turn."""
     schema = {
         "score": SCORE_RUBRIC,
-        "failure_tags": "array, maximum 3",
-        "critique": "maximum 2 sentences and 60 words; empty outside Drill",
+        "failure_tags": "array of 0-3 tag strings",
+        "critique": (
+            "required string, 1-2 sentences, maximum 60 words: the single most "
+            "important weakness, specific to what the candidate actually said"
+        ),
+        "fix": "required string: one concrete thing to do differently next time",
         "materially_weak": "boolean",
-        "next_question": "one candidate-facing question, or empty if done",
-        "next_topic": "string", "concept": "underlying concept", "difficulty": "optional string",
-        "done": "boolean",
+        "next_question": (
+            "required string: one candidate-facing question"
+            if not final_turn
+            else "string: one candidate-facing question, or empty"
+        ),
+        "next_topic": "string", "concept": "string (underlying concept)",
+        "difficulty": "optional string",
     }
     if final_turn:
         schema["postmortem"] = {
@@ -258,6 +403,90 @@ def _parse_evaluation_data(raw: str) -> dict:
     return data
 
 
+def _repair_message(problems: list[str]) -> str:
+    detail = "; ".join(problems) or "the response was unusable"
+    return (
+        f"Your previous response was unusable ({detail}). Return valid JSON only "
+        "using the exact required schema, with no preamble or extra fields. "
+        "Every required field must be present and correctly typed."
+    )
+
+
+_POSTMORTEM_LIST_ALIASES = {
+    "strongest_areas": ("strengths",),
+    "biggest_problems": ("weaknesses", "improvements"),
+    "concepts_to_repeat": ("next_steps",),
+}
+
+
+def _postmortem_items(raw: dict, key: str, limit: int) -> list[str]:
+    """Read a postmortem list, preferring the canonical key and accepting aliases."""
+    value = raw.get(key)
+    if value in (None, "", []):
+        for alias in _POSTMORTEM_LIST_ALIASES.get(key, ()):
+            candidate = raw.get(alias)
+            if candidate not in (None, "", []):
+                value = candidate
+                break
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()][:limit]
+
+
+def _build_postmortem(data: dict) -> InterviewPostmortem:
+    """Turn whatever the model returned into a postmortem with an honest status."""
+    raw = data.get("postmortem") if isinstance(data.get("postmortem"), dict) else {}
+    overall = str(raw.get("overall_performance") or "").strip()
+    strongest = _postmortem_items(raw, "strongest_areas", 3)
+    problems = _postmortem_items(raw, "biggest_problems", 3)
+    repeat = _postmortem_items(raw, "concepts_to_repeat", 6)
+    roots = raw.get("root_causes")
+    roots = {str(k): str(v) for k, v in roots.items()} if isinstance(roots, dict) else {}
+    if overall and strongest and problems and repeat:
+        status = "ok"
+    elif overall or strongest or problems or repeat:
+        status = "partial"
+    else:
+        status = "missing"
+    return InterviewPostmortem(
+        overall_performance=overall,
+        biggest_problems=problems,
+        strongest_areas=strongest,
+        concepts_to_repeat=repeat,
+        root_causes=roots,
+        trend=str(raw.get("trend") or "").strip(),
+        status=status,
+    )
+
+
+_POSTMORTEM_RANK = {"": 0, "missing": 0, "partial": 1, "ok": 2}
+
+
+def _postmortem_rank(postmortem: InterviewPostmortem | None) -> int:
+    return _POSTMORTEM_RANK.get(postmortem.status if postmortem else "", 0)
+
+
+# Turn evaluation quality for choosing between a first response and its repair.
+_EVALUATION_STATUS_RANK = {"invalid": 0, "partial": 1, "ok": 2}
+
+
+def _read_turn(raw: str) -> tuple[dict, TurnEvaluation, list[str]]:
+    """Parse one structured response without raising; report what was wrong."""
+    try:
+        data = _parse_evaluation_data(raw)
+    except (ValueError, json.JSONDecodeError):
+        return {}, TurnEvaluation(), ["the response was not valid JSON in the required schema"]
+    evaluation = TurnEvaluation.model_validate(data)
+    problems: list[str] = []
+    if evaluation.score is None:
+        problems.append("score missing")
+    if not evaluation.critique:
+        problems.append("critique empty")
+    return data, evaluation, problems
+
+
 def evaluate_answer(
     session_id: str,
     answer_text: str,
@@ -276,6 +505,7 @@ def evaluate_answer(
         "candidate_answer": answer_text.strip(),
         "is_retry": is_retry,
         "final_turn": final_turn,
+        "questions_remaining": max(0, session.target_questions - len(session.questions)),
         "recent_context": _recent_context(session),
         "setup": {
             "topic": session.topic, "role": session.role,
@@ -284,95 +514,114 @@ def evaluate_answer(
         "output_schema": _evaluation_schema(final_turn),
     }
     llm = provider or default_provider()
-    raw = llm.complete(
-        [
-            {"role": "system", "content": _system(session, json.dumps(prompt), transcript_note=voice_origin)},
-            {"role": "user", "content": "Make the next interviewer move using the required JSON schema."},
-        ],
-        CompletionOptions(model=session.model or interview_model(), max_tokens=650 if final_turn else 350),
-    )
-    try:
-        data = _parse_evaluation_data(raw)
-    except (ValueError, json.JSONDecodeError):
-        # A provider can still cut off a structured response. Retry once with
-        # the already-scoped compact contract instead of losing the answer.
-        recovery = llm.complete(
-            [
-                {"role": "system", "content": _system(session, json.dumps(prompt), transcript_note=voice_origin)},
-                {"role": "user", "content": (
-                    "Your previous response was malformed. Return valid JSON only using "
-                    "the exact required schema, with no preamble or extra fields."
-                )},
-            ],
-            CompletionOptions(model=session.model or interview_model(), max_tokens=650 if final_turn else 350),
-        )
+    base_tokens = EVAL_FINAL_MAX_TOKENS if final_turn else EVAL_MAX_TOKENS
+
+    def complete(
+        user_message: str, *, max_tokens: int, json_mode: bool = True, temperature: float = 0.4,
+    ) -> str:
         try:
-            data = _parse_evaluation_data(recovery)
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError("The interview model returned malformed structured feedback twice.") from exc
-    # A few OpenAI-compatible DeepSeek endpoints emit prose or a partial JSON
-    # object despite response_format=json_object. Recover with a tiny plain-
-    # text request instead of failing the candidate's submitted answer.
-    if not (bool(data.get("done")) or final_turn) and not _has_question(data, session.topic):
-        recovery = llm.complete(
-            [
-                {"role": "system", "content": _system(session, json.dumps(prompt), transcript_note=voice_origin)},
-                {"role": "user", "content": "Ask one concise follow-up question only. Return plain text; no JSON, analysis, score, or preamble."},
-            ],
-            CompletionOptions(
-                model=session.model or interview_model(), max_tokens=100,
-                temperature=0.2, json_mode=False,
-            ),
-        )
-        recovered = parse_json_response(recovery)
-        if _has_question(recovered, session.topic):
-            data["next_question"] = _question(recovered, session.topic).text
-    try:
-        score = max(1, min(10, int(data.get("score"))))
-    except (TypeError, ValueError):
-        score = None
-    raw_tags = data.get("failure_tags") if isinstance(data.get("failure_tags"), list) else []
-    tags = [str(tag) for tag in raw_tags if str(tag) in FAILURE_TAGS][:3]
-    critique = _compact_critique(data.get("critique"))
-    question.answers.append(InterviewAnswer(
-        text=answer_text.strip(), score=score, failure_tags=tags,
-        critique=critique, is_retry=is_retry, voice=voice_origin,
+            return llm.complete(
+                [
+                    {"role": "system", "content": _system(session, json.dumps(prompt), transcript_note=voice_origin)},
+                    {"role": "user", "content": user_message},
+                ],
+                CompletionOptions(
+                    model=session.model or interview_model(), max_tokens=max_tokens,
+                    temperature=temperature, json_mode=json_mode,
+                ),
+            )
+        except InterviewOutputError:
+            # Empty content is an output problem, not a provider failure. Treat
+            # it as an unusable read so the repair/fallback path still runs.
+            return ""
+
+    # At most two calls per turn. The single repair is either the structured
+    # retry (invalid score or empty critique) or the plain-text question
+    # recovery, whichever is needed first.
+    repair_used = False
+    first_data, first_evaluation, problems = _read_turn(complete(
+        "Make the next interviewer move using the required JSON schema.",
+        max_tokens=base_tokens,
     ))
-    mark_review(question, score, tags, is_retry)
+    data, evaluation = first_data, first_evaluation
+    first_postmortem = _build_postmortem(first_data) if final_turn else None
+    repair_postmortem: InterviewPostmortem | None = None
+    if final_turn and first_postmortem is not None and first_postmortem.status == "missing":
+        # A missing final review is a problem for the turn's one repair, which
+        # re-requests the whole final JSON and lists every problem at once.
+        problems.append("postmortem missing")
+    if problems:
+        repair_used = True
+        repair_data, repair_evaluation, _ = _read_turn(complete(
+            _repair_message(problems),
+            max_tokens=int(base_tokens * REPAIR_TOKEN_FACTOR),
+        ))
+        repair_postmortem = _build_postmortem(repair_data) if final_turn else None
+        first_rank = _EVALUATION_STATUS_RANK.get(first_evaluation.status, 0)
+        repair_rank = _EVALUATION_STATUS_RANK.get(repair_evaluation.status, 0)
+        if first_rank == 0 and repair_rank == 0:
+            raise InterviewOutputError(
+                "The interview model returned unusable structured feedback twice."
+            )
+        # The higher-ranked evaluation wins; a tie prefers the repair.
+        if repair_rank >= first_rank:
+            data, evaluation = repair_data, repair_evaluation
+        else:
+            data, evaluation = first_data, first_evaluation
+        if not evaluation.next_question and first_evaluation.next_question:
+            # The chosen response dropped the follow-up the first one supplied.
+            evaluation.next_question = first_evaluation.next_question
 
-    done = bool(data.get("done")) or final_turn
-    data.update({"score": score, "failure_tags": tags, "critique": critique, "done": done})
+    done = final_turn
+    if not done and not evaluation.next_question:
+        if repair_used:
+            evaluation.next_question = FALLBACK_FOLLOW_UP
+        else:
+            repair_used = True
+            recovered = parse_json_response(complete(
+                "Ask one concise follow-up question only. Return plain text; no JSON, "
+                "analysis, score, or preamble.",
+                max_tokens=QUESTION_RECOVERY_MAX_TOKENS, json_mode=False, temperature=0.2,
+            ))
+            evaluation.next_question = _question_text(recovered) or FALLBACK_FOLLOW_UP
+
+    question.answers.append(InterviewAnswer(
+        text=answer_text.strip(), score=evaluation.score,
+        failure_tags=evaluation.failure_tags, critique=evaluation.critique,
+        fix=evaluation.fix, evaluation_status=evaluation.status,
+        is_retry=is_retry, voice=voice_origin,
+    ))
+    mark_review(question, evaluation.score, evaluation.failure_tags, is_retry)
+
+    result = {
+        "score": evaluation.score,
+        "failure_tags": evaluation.failure_tags,
+        "critique": evaluation.critique,
+        "fix": evaluation.fix,
+        "evaluation_status": evaluation.status,
+        "materially_weak": evaluation.materially_weak,
+        "next_question": evaluation.next_question,
+        "next_topic": evaluation.next_topic,
+        "concept": evaluation.concept,
+        "difficulty": evaluation.difficulty,
+        "done": done,
+    }
     if done:
-        raw_postmortem = data.get("postmortem") if isinstance(data.get("postmortem"), dict) else {}
-        def strings(key: str, limit: int = 3) -> list[str]:
-            value = raw_postmortem.get(key, [])
-            if isinstance(value, str):
-                value = [value]
-            return [str(item).strip() for item in value if str(item).strip()][:limit] if isinstance(value, list) else []
-
-        roots = raw_postmortem.get("root_causes")
-        roots = {str(k): str(v) for k, v in roots.items()} if isinstance(roots, dict) else {}
-        session.postmortem = InterviewPostmortem(
-            overall_performance=str(raw_postmortem.get("overall_performance") or "Session completed.").strip(),
-            biggest_problems=strings("biggest_problems"),
-            strongest_areas=strings("strongest_areas"),
-            concepts_to_repeat=strings("concepts_to_repeat", 6),
-            root_causes=roots,
-            trend=str(raw_postmortem.get("trend") or "").strip(),
-        )
+        postmortem = _build_postmortem(data)
+        # The postmortem is chosen independently of which evaluation won: keep
+        # the better of the first and repair reviews.
+        alternative = repair_postmortem if data is first_data else first_postmortem
+        if _postmortem_rank(alternative) > _postmortem_rank(postmortem):
+            postmortem = alternative
+        session.postmortem = postmortem
         session.status = "completed"
         session.completed_at = datetime.now(timezone.utc)
         session.pending_move = {}
         _record_view_practice(session)
     else:
-        session.pending_move = {
-            key: data.get(key) for key in (
-                "score", "failure_tags", "critique", "materially_weak",
-                "next_question", "next_topic", "concept", "difficulty", "done",
-            )
-        }
+        session.pending_move = result
     save_session(session)
-    return session, data
+    return session, result
 
 
 def _record_view_practice(session: InterviewSession) -> None:
@@ -381,8 +630,9 @@ def _record_view_practice(session: InterviewSession) -> None:
         return
     from storage.persistence import load_state, save_state
     state = load_state()
+    usable_postmortem = bool(session.postmortem) and session.postmortem.status in ("ok", "partial")
     diagnostics: list[str] = []
-    if session.postmortem:
+    if usable_postmortem:
         diagnostics = (session.postmortem.biggest_problems + session.postmortem.strongest_areas)[:3]
     style = session.practice_style.lower()
     for view in state.topic_views:
@@ -396,7 +646,10 @@ def _record_view_practice(session: InterviewSession) -> None:
             view.practice.discussion_attempts += 1
         elif style == "defend":
             view.practice.defense_attempts += 1
-        view.practice.latest_diagnostic = diagnostics
+        # Counts always move, but a missing or legacy review must not overwrite
+        # the last usable diagnostic, and neither must an empty one.
+        if usable_postmortem and diagnostics:
+            view.practice.latest_diagnostic = diagnostics
     save_state(state)
 
 
@@ -472,7 +725,7 @@ def answer_tips(
             temperature=0.25, json_mode=False,
         ),
     )
-    return raw.strip() or "No tips were returned. Review the answer for a clear conclusion and supporting mechanism."
+    return raw.strip()
 
 
 def reference_answer(

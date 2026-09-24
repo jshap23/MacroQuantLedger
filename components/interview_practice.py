@@ -10,9 +10,10 @@ from nicegui import run, ui
 
 from services.interview_controller import (
     abandon_session, advance_session, answer_tips, evaluate_answer, reference_answer,
-    rubric_band_for, start_session,
+    session_band, start_session,
 )
 from services.interview_llm import (
+    InterviewOutputError, InterviewProviderError,
     available as llm_available, grader_model, interview_model, selectable_models,
 )
 from services.interview_prompts import (
@@ -26,9 +27,9 @@ from components.interview_speech import (
 from components.interview_tts import speak_question, stop_speaking
 from components.status_bar import days_since, staleness_color, staleness_label
 from storage.interview_store import (
-    load_database, model_practice_stats, performance_summary, practice_pulse,
-    preferred_model, recent_answers, save_preferred_model, view_practice_queue,
-    view_practice_stats, view_refresh_target,
+    InterviewHistoryUnreadable, load_database, model_practice_stats, performance_summary,
+    practice_pulse, preferred_model, recent_answers, save_preferred_model,
+    view_practice_queue, view_practice_stats, view_refresh_target,
 )
 from storage.interview_store import gone_quiet_tags as _not_flagged_tags
 from storage.model_library import (
@@ -152,6 +153,8 @@ def _inject_css() -> None:
         .pm-col { max-width:68ch; }
         .pm-cleared { color:#34d399; }
         body.light-mode .pm-cleared { color:#15803d; }
+        .pm-warn { color:#fbbf24; font-weight:600; }
+        body.light-mode .pm-warn { color:#b45309; }
         .interview-recording-panel {
             margin-top:0.7rem; padding:0.75rem; border:1px solid var(--border);
             border-radius:6px; background:var(--bg-input);
@@ -299,6 +302,26 @@ def _label(text: str) -> None:
     ui.label(text).classes("field-label")
 
 
+def _render_history_error(exc: InterviewHistoryUnreadable) -> None:
+    """One error card shown when the practice history could not be read.
+
+    The file is left untouched (and backed up) rather than treated as empty, so
+    nothing is overwritten. The rest of the app keeps working.
+    """
+    with ui.element("div").classes("interview-card").style(
+        "border-color:#d97706;"
+    ):
+        ui.label("PRACTICE HISTORY UNAVAILABLE").classes("interview-kicker")
+        ui.label(
+            "Your saved practice history could not be read, so it was left untouched "
+            "instead of being overwritten. Fix or restore the file below, then reload."
+        ).style("font-size:0.9rem; color:var(--text-primary); margin-top:0.35rem;")
+        ui.label(f"Backup saved to: {exc.backup}").classes("interview-meta").style(
+            "margin-top:0.35rem;"
+        )
+        ui.label(f"Original file: {exc.source}").classes("interview-meta")
+
+
 def render_interview_practice(app_state=None, launch_bridge=None, review_view=None) -> None:
     _inject_css()
     state = {
@@ -324,18 +347,21 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
     def refresh() -> None:
         root.clear()
         with root:
-            session = state["session"]
-            if session is None:
-                if state["view_setup"]:
-                    _render_view_setup(state, refresh, app_state)
-                elif state["models_setup"]:
-                    _render_model_library(state, refresh)
+            try:
+                session = state["session"]
+                if session is None:
+                    if state["view_setup"]:
+                        _render_view_setup(state, refresh, app_state)
+                    elif state["models_setup"]:
+                        _render_model_library(state, refresh)
+                    else:
+                        _render_home(state, refresh, app_state)
+                elif session.status == "completed":
+                    _render_postmortem(session, state, refresh)
                 else:
-                    _render_home(state, refresh, app_state)
-            elif session.status == "completed":
-                _render_postmortem(session, state, refresh)
-            else:
-                _render_session(session, state, refresh)
+                    _render_session(session, state, refresh)
+            except InterviewHistoryUnreadable as exc:
+                _render_history_error(exc)
 
     if launch_bridge is not None:
         def open_views(view_ids, style="Deliver"):
@@ -1351,6 +1377,7 @@ def _render_session(session, state: dict, refresh) -> None:
             live_caption = ui.label("").classes("interview-live-caption")
         recording_panel.visible = False
         fallback_preview = {"text": ""}
+        refined = {"text": ""}
         voice_draft = {"base": "", "draft": "", "full": ""}
         voice_active = {"value": False}
         submitting = {"value": False}
@@ -1391,14 +1418,24 @@ def _render_session(session, state: dict, refresh) -> None:
                 improved = str(result.get("text") or "").strip()
                 voice_origin["value"] = True
                 current = (answer.value or "").strip()
+                edited_caption = False
                 if voice_draft["full"] and current == voice_draft["full"]:
                     answer.set_value(combined(voice_draft["base"], improved))
+                elif voice_draft["full"]:
+                    # The candidate edited the caption draft while whisper ran.
+                    # Never overwrite their edits or append (which would
+                    # duplicate the answer); offer the refined transcript.
+                    refined["text"] = combined(voice_draft["base"], improved)
+                    use_refined_btn.visible = bool(refined["text"])
+                    edited_caption = True
                 else:
                     append_transcript(improved)
                 device = result.get("device") or "local"
                 model_name = result.get("model") or "speech model"
                 recording_status.set_text(
-                    f"Transcript ready with {model_name} on {device} · review before submitting"
+                    "Refined transcript ready — your edits were kept"
+                    if edited_caption
+                    else f"Transcript ready with {model_name} on {device} · review before submitting"
                 )
                 error.set_text("")
                 fallback_preview["text"] = ""
@@ -1440,6 +1477,8 @@ def _render_session(session, state: dict, refresh) -> None:
             recording_panel.visible = True
             recording_status.set_text("Recording 00:00 · pauses are safe")
             replay_btn.visible = False
+            refined["text"] = ""
+            use_refined_btn.visible = False
             mic.visible = False
             stop_btn.visible = True
             stop_btn.enable()
@@ -1517,7 +1556,9 @@ def _render_session(session, state: dict, refresh) -> None:
             voice_active["value"] = False
             voice_origin["value"] = False
             fallback_preview["text"] = ""
+            refined["text"] = ""
             use_preview_btn.visible = False
+            use_refined_btn.visible = False
             recording_status.set_text("Recording discarded")
             error.set_text("")
             set_idle()
@@ -1528,6 +1569,15 @@ def _render_session(session, state: dict, refresh) -> None:
                 voice_origin["value"] = True
                 use_preview_btn.visible = False
                 recording_status.set_text("Live captions inserted · audio remains available")
+            submit_btn.enable()
+
+        def use_refined() -> None:
+            if refined["text"]:
+                answer.set_value(refined["text"])
+                voice_origin["value"] = True
+                refined["text"] = ""
+                use_refined_btn.visible = False
+                recording_status.set_text("Refined transcript inserted · review before submitting")
             submit_btn.enable()
 
         async def replay_voice() -> None:
@@ -1571,6 +1621,25 @@ def _render_session(session, state: dict, refresh) -> None:
                 await stop_speaking()
                 await cancel_recording()
                 refresh()
+            except InterviewProviderError:
+                # Transport/auth/rate-limit failure: the answer was never
+                # evaluated, so it stays in the box for a retry.
+                error.set_text(
+                    "The model provider failed (network, key, or rate limit). "
+                    "Nothing was saved; your answer is still here."
+                )
+                submitting["value"] = False
+                submit_btn.enable()
+                mic.enable()
+                submit_btn.set_text("Submit Answer")
+            except InterviewOutputError:
+                error.set_text(
+                    "The model returned unusable feedback twice. Nothing was saved; submit again."
+                )
+                submitting["value"] = False
+                submit_btn.enable()
+                mic.enable()
+                submit_btn.set_text("Submit Answer")
             except Exception as exc:
                 error.set_text(f"Could not continue: {exc}")
                 submitting["value"] = False
@@ -1611,6 +1680,10 @@ def _render_session(session, state: dict, refresh) -> None:
                 tips_text.set_text(tips)
                 tips_panel.visible = True
                 answer.run_method("focus")
+            except InterviewOutputError:
+                # Empty content: the starvation hint is logged server-side, not
+                # shown to the candidate.
+                error.set_text("The model returned an empty response. Try again or switch models.")
             except Exception as exc:
                 error.set_text(f"Could not get tips: {exc}")
             finally:
@@ -1628,9 +1701,11 @@ def _render_session(session, state: dict, refresh) -> None:
             ).props("dense no-caps flat")
             cancel_voice_btn = ui.button("Cancel", on_click=discard_voice).classes("cancel-btn")
             use_preview_btn = ui.button("Use Live Captions", on_click=use_preview).classes("cancel-btn")
+            use_refined_btn = ui.button("Use refined transcript", on_click=use_refined).classes("cancel-btn")
             stop_btn.visible = False
             cancel_voice_btn.visible = False
             use_preview_btn.visible = False
+            use_refined_btn.visible = False
             replay_btn.visible = False
             ui.label("Voice drafts stay editable. Get Answer Tips gives coaching before you submit.").classes("interview-meta")
         ui.label(
@@ -1656,14 +1731,26 @@ def _render_session(session, state: dict, refresh) -> None:
 
 def _render_drill_feedback(session, result: dict, state: dict, refresh) -> None:
     score = result.get("score")
+    critique = (result.get("critique") or "").strip()
+    fix = (result.get("fix") or "").strip()
     with ui.element("div").classes("interview-feedback"):
         ui.label(f"SCORE  {score if score is not None else '—'} / 10").style("font-weight:700; color:var(--text-primary);")
         with ui.element("div").style("margin:0.4rem 0;"):
             for tag in result.get("failure_tags", []):
                 ui.label(tag).classes("interview-tag")
-        ui.label(result.get("critique") or "No material failure identified.").style(
-            "color:var(--text-muted); font-size:0.82rem; line-height:1.55; white-space:pre-wrap;"
-        )
+        if critique:
+            ui.label(critique).style(
+                "color:var(--text-muted); font-size:0.82rem; line-height:1.55; white-space:pre-wrap;"
+            )
+        if fix:
+            ui.label("FIX").classes("interview-kicker").style("margin-top:0.5rem;")
+            ui.label(fix).style(
+                "color:var(--text-primary); font-size:0.82rem; line-height:1.55; white-space:pre-wrap;"
+            )
+        if result.get("evaluation_status") == "partial":
+            ui.label(
+                "Partial feedback — the model returned a score but was missing a critique or fix."
+            ).classes("pm-warn").style("font-size:0.78rem; margin-top:0.45rem;")
 
     advancing = {"value": False}
 
@@ -1707,22 +1794,13 @@ def _render_score_band(session) -> None:
     """Show the session score as its rubric band, never the raw 1-10 integer.
 
     Only sessions graded under the current rubric version show a band; older
-    sessions render as before, with no band line. The score is the session
-    average of graded answers (round half up), so a multi-question session is
-    represented as a whole.
+    sessions render as before, with no band line. New sessions average only
+    first attempts and need enough scored answers; legacy sessions are
+    unchanged, and a missing summary hides the band entirely.
     """
     if session.prompt_pack_version != PROMPT_PACK_VERSION:
         return
-    scores = [
-        answer.score
-        for question in session.questions
-        for answer in question.answers
-        if answer.score is not None
-    ]
-    if not scores:
-        return
-    average = sum(scores) / len(scores)
-    band = rubric_band_for(int(average + 0.5))
+    band = session_band(session)
     if band is None:
         return
     label, descriptor, next_descriptor = band
@@ -1735,6 +1813,46 @@ def _render_score_band(session) -> None:
         )
 
 
+def _render_answer_feedback(session) -> None:
+    """Collapsed per-answer run-through; shown once any answer has a critique.
+
+    This is the first place non-Drill presets surface the per-answer critique,
+    fix, tags, and evaluation status.
+    """
+    has_critique = any(
+        (answer.critique or "").strip()
+        for question in session.questions
+        for answer in question.answers
+    )
+    if not has_critique:
+        return
+    with ui.expansion("Answer-by-answer feedback").classes("w-full").style("margin-top:1rem;"):
+        for index, question in enumerate(session.questions, start=1):
+            for answer in question.answers:
+                with ui.element("div").style(
+                    "padding:0.5rem 0; border-bottom:1px solid var(--border);"
+                ):
+                    with ui.row().style("gap:0.5rem; align-items:baseline; flex-wrap:wrap;"):
+                        ui.label(
+                            f"Q{index} · SCORE {answer.score if answer.score is not None else '—'} / 10"
+                        ).classes("pm-body").style("font-weight:600;")
+                        if answer.evaluation_status:
+                            ui.label(answer.evaluation_status).classes("interview-meta")
+                        if answer.is_retry:
+                            ui.label("retry").classes("interview-meta")
+                    ui.label(question.text).classes("interview-meta").style("margin:0.15rem 0;")
+                    if answer.failure_tags:
+                        with ui.element("div").style("margin:0.15rem 0;"):
+                            for tag in answer.failure_tags:
+                                ui.label(tag).classes("interview-tag")
+                    if answer.critique:
+                        ui.label(answer.critique).classes("pm-body")
+                    if answer.fix:
+                        ui.label(f"FIX: {answer.fix}").classes("pm-body").style(
+                            "color:var(--text-muted);"
+                        )
+
+
 def _render_postmortem(session, state: dict, refresh) -> None:
     """Results screen: a single ~68ch reading column."""
     with ui.element("div").classes("pm-col"):
@@ -1744,13 +1862,33 @@ def _render_postmortem(session, state: dict, refresh) -> None:
 def _render_postmortem_inner(session, state: dict, refresh) -> None:
     post = session.postmortem
     preset = get_preset(session.preset_key, session.mode)
+    status = post.status if post else ""
+    legacy = post is None or status == ""
+    show_overall = preset.key not in {"maintenance_20", "weaknesses"}
     ui.label("SESSION COMPLETE").classes("interview-kicker")
     ui.label(f"{preset.label} · {session.topic} · {len(session.questions)} questions").classes("interview-meta")
     with ui.element("div").classes("interview-card").style("margin-top:0.8rem;"):
-        if preset.key not in {"maintenance_20", "weaknesses"}:
-            ui.label("OVERALL").classes("section-header")
-            ui.label(post.overall_performance if post else "Session completed.").style("line-height:1.6;")
-            _render_score_band(session)
+        if status == "partial":
+            ui.label("PARTIAL SUMMARY").classes("pm-warn").style(
+                "font-size:0.72rem; letter-spacing:0.08em;"
+            )
+        if legacy:
+            # Legacy sessions render exactly as before the postmortem status existed.
+            if show_overall:
+                ui.label("OVERALL").classes("section-header")
+                ui.label(post.overall_performance if post else "Session completed.").style("line-height:1.6;")
+                _render_score_band(session)
+        elif status == "missing":
+            ui.label(
+                "Summary unavailable — the model didn't return a usable review. "
+                "Per-answer feedback is below."
+            ).classes("pm-warn").style("line-height:1.6;")
+        else:
+            if show_overall:
+                ui.label("OVERALL").classes("section-header")
+                if post.overall_performance:
+                    ui.label(post.overall_performance).style("line-height:1.6;")
+                _render_score_band(session)
         if post:
             if preset.key == "view_deliver":
                 _postmortem_list("COVERED", post.strongest_areas)
@@ -1778,6 +1916,8 @@ def _render_postmortem_inner(session, state: dict, refresh) -> None:
                     detail = post.root_causes.get(category, "")
                     if detail:
                         ui.label(f"{category.upper()} — {detail}").classes("pm-body")
+        if not legacy:
+            _render_answer_feedback(session)
         _render_tag_history(session)
 
     def new_session() -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -11,11 +12,30 @@ import config as app_config
 from storage import user_settings
 
 
+_log = logging.getLogger(__name__)
+
+
 FAILURE_TAGS = {
     "ANSWER_FIRST", "RAMBLE", "DID_NOT_ANSWER", "KNOWLEDGE_GAP",
     "EVIDENCE_GAP", "WEAK_MECHANISM", "UNSUPPORTED_ASSERTION",
     "FAILED_PUSHBACK", "IMPLEMENTATION_GAP", "TOO_HEDGED", "OVERCONFIDENT",
 }
+
+
+class InterviewProviderError(RuntimeError):
+    """The provider/transport call itself failed (network, auth, rate limit).
+
+    Nothing about the candidate's answer is implicated; the caller may safely
+    retry, and no evaluation should be saved.
+    """
+
+
+class InterviewOutputError(RuntimeError):
+    """The model returned unusable structured output after the single repair.
+
+    Distinct from a provider/transport failure: the call succeeded but the
+    content could not be turned into a valid evaluation, so nothing is saved.
+    """
 
 INTERVIEW_MODELS_OPENROUTER = [
     "z-ai/glm-5.3",
@@ -147,11 +167,29 @@ class OpenAICompatibleProvider:
                 kwargs.pop("response_format")
                 dropped = True
             if not dropped:
-                raise
-            response = self.client.chat.completions.create(**kwargs)
+                raise InterviewProviderError(f"The interview provider call failed: {exc}") from exc
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+            except Exception as retry_exc:
+                raise InterviewProviderError(
+                    f"The interview provider call failed: {retry_exc}"
+                ) from retry_exc
         if not response.choices:
-            raise RuntimeError("The interview model returned no response.")
-        return (response.choices[0].message.content or "").strip()
+            raise InterviewProviderError("The interview model returned no response.")
+        content = (response.choices[0].message.content or "").strip()
+        if not content:
+            # Empty content is an output problem, not a provider failure: the
+            # call succeeded but emitted nothing, usually because hidden
+            # reasoning consumed the whole budget.
+            _log.warning(
+                "Interview model returned empty content (model=%s): "
+                "possible reasoning-budget starvation.", options.model,
+            )
+            raise InterviewOutputError(
+                "The interview model returned empty content; "
+                "possible reasoning-budget starvation."
+            )
+        return content
 
 
 def default_provider() -> LLMProvider:

@@ -24,6 +24,13 @@ class InterviewAnswer(BaseModel):
     score: Optional[int] = None
     failure_tags: list[str] = Field(default_factory=list)
     critique: str = ""
+    # One concrete thing to do differently next time. Plain str, not Literal, so
+    # legacy answers that never recorded one load as "".
+    fix: str = ""
+    # "ok" when score, critique, and fix were all present; "partial" when a score
+    # was saved without critique or fix. "" marks a legacy answer from before
+    # status was recorded.
+    evaluation_status: str = ""
     is_retry: bool = False
     # True when the answer was dictated and submitted as a raw speech-to-text
     # transcript rather than typed. Used to scope the grader's transcription
@@ -51,6 +58,10 @@ class InterviewPostmortem(BaseModel):
     concepts_to_repeat: list[str] = Field(default_factory=list)
     root_causes: dict[str, str] = Field(default_factory=dict)
     trend: str = ""
+    # "ok" when overall text plus at least one item in each list is present;
+    # "partial" when some but not all; "missing" when nothing usable came back.
+    # "" marks a legacy postmortem that never recorded a status.
+    status: str = ""
 
 
 class InterviewSession(BaseModel):
