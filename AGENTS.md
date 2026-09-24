@@ -81,7 +81,7 @@ All component CSS must follow this pattern. Current IDs in use:
 3. **Review**
    - **Weekly Review** — Time allocation and synthesis log
    - **Attribution** — View-vs-returns analysis with echarts
-4. **Practice** — Interview practice with typed or voice answers, optional OpenRouter TTS question playback, and scoring. The landing page leads with **My Views** quick-start, then the **QUANT PRACTICE** card: model-note modes (Explain / Defend / Compare / Deep Dive) backed by a read-only Obsidian Models library, plus Quant Fundamentals and an Advanced Setup fallback
+4. **Practice** — Interview practice with typed or voice answers, optional OpenRouter TTS question playback, and scoring. The home opens with a **PRACTICE** header and a reps-only pulse line, then the **My Views** quick-start board, the **QUANT REVIEW** card (My Models library, Quant Drill, Weak Spots, Surprise Me), a collapsed **Interview Prep** expansion (Job Interview, Research Defense, Readiness Check), and a centered **Custom session…** link; short setups open inline under their own section, unfinished sessions resume there too, and there is no Performance section
 
 ### Data Flow
 
@@ -131,7 +131,7 @@ All component CSS must follow this pattern. Current IDs in use:
 | `components/research_feed.py` | Papers tab — merged feed list, unread/all filter, mark-read state |
 | `components/trades.py` | Trade Tracker tab — add/close/delete ETF positions, price return vs total return |
 | `components/attribution.py` | Attribution tab — echarts timeline, score analysis, streak badges |
-| `components/interview_practice.py` | Practice tab UI — My Views-first landing, QUANT PRACTICE card with searchable My Models library (one click per mode starts a session), Quant Fundamentals quick-start, Advanced Setup fallback, sparring loop, keyboard shortcuts, exit confirmation, draft-only answer tips, optional question TTS controls, immediate postmortem with a separate summary synthesis + Retry summary |
+| `components/interview_practice.py` | Practice tab UI — home is a PRACTICE header with a reps-only pulse line, then a My Views quick-start board (Deliver/Discuss/Defend toggle, PICK UP NEXT / KEEPING WARM rows), a QUANT REVIEW card (My Models library, Quant Drill, Weak Spots, Surprise Me), a collapsed Interview Prep expansion (Job Interview, Research Defense, Readiness Check), and a Custom session… link; short setups open inline per section, no Performance section; sparring loop, keyboard shortcuts, exit confirmation, draft-only answer tips, optional question TTS controls, immediate postmortem with a separate summary synthesis + Retry summary |
 | `components/interview_speech.py` | Browser-side recorder glue for voice answers (live-caption preview + audio capture) |
 | `components/interview_tts.py` | Browser playback glue for server-generated Practice question audio |
 | `export/excel.py` | Multi-sheet Excel workbook — macro views, asset views, reconciliations |
