@@ -302,6 +302,31 @@ def _inject_css() -> None:
             .age{grid-area:age} .actions{grid-area:actions} .meter{grid-area:trend}
             .delta{grid-area:delta} .pips{grid-area:pips}
         }
+        .interview-unfinished {
+            display:flex; align-items:center; justify-content:space-between; gap:0.6rem;
+            flex-wrap:wrap; border:1px solid var(--accent); border-radius:5px;
+            padding:0.3rem 0.55rem; margin-bottom:0.7rem; background:var(--bg-input);
+        }
+        .interview-unfinished-label { color:var(--text-muted); font-size:0.72rem; }
+        .interview-short-setup {
+            margin-top:0.75rem; padding-top:0.7rem; border-top:1px solid var(--border);
+        }
+        .interview-prep-title {
+            font-family:'IBM Plex Mono',monospace; font-size:0.68rem; font-weight:700;
+            letter-spacing:0.14em; color:var(--text-primary);
+        }
+        @layer overrides {
+            .q-btn.interview-textlink {
+                background:transparent !important; color:var(--text-muted) !important;
+                border:none !important; box-shadow:none !important;
+                font-size:0.72rem !important; text-transform:none !important;
+                letter-spacing:normal !important; min-height:24px !important;
+                padding:0.15rem 0.5rem !important;
+            }
+            .q-btn.interview-textlink:hover {
+                color:var(--accent) !important; background:var(--accent-glow) !important;
+            }
+        }
     </style>''')
 
 
@@ -340,6 +365,8 @@ def render_interview_practice(app_state=None, launch_bridge=None, review_view=No
         "advanced_setup": False,
         "view_setup": None,
         "models_setup": None,
+        "short_setup": None,
+        "interview_prep_open": False,
         "quant_session_note": None,
         "compare_sel": [],
         "review_view": review_view,
@@ -421,26 +448,90 @@ def _render_practice_pulse(app_state) -> None:
         )
 
 
+_UI_PRESET_LABELS = {
+    "weaknesses": "Weak Spots",
+    "maintenance_20": "Readiness Check (20 min)",
+    "diagnostic_60": "Readiness Check (60 min)",
+}
+
+_QUANT_SHORT_SETUPS = ("quant_drill", "weaknesses")
+_PREP_SHORT_SETUPS = ("job_interview", "research_defense", "maintenance_20", "diagnostic_60")
+_SHORT_SETUPS = _QUANT_SHORT_SETUPS + _PREP_SHORT_SETUPS
+
+
+def _display_label(preset) -> str:
+    """Practice-home label for a preset (the stored preset key is unchanged)."""
+    return _UI_PRESET_LABELS.get(preset.key, preset.label)
+
+
+def _home_section_for(preset_key: str) -> str:
+    """Which Practice-home section owns a preset's sessions."""
+    if preset_key.startswith("view_"):
+        return "views"
+    if preset_key.startswith("model_") or preset_key in _QUANT_SHORT_SETUPS:
+        return "quant"
+    return "interview"
+
+
+def _last_session_for(preset_key: str):
+    """The most recently created session with this preset, if any (sessions load newest first)."""
+    return next((s for s in load_database().sessions if s.preset_key == preset_key), None)
+
+
+def _open_short_setup(state: dict, refresh, key: str) -> None:
+    state["short_setup"] = key
+    if _home_section_for(key) == "interview":
+        state["interview_prep_open"] = True
+    refresh()
+
+
+def _resume_session(state: dict, refresh, active) -> None:
+    """Resume behavior unchanged from the old standalone continue card."""
+    state["session"] = active
+    state["pending"] = active.pending_move or None
+    state["retrying"] = bool(
+        active.questions[-1].answers and active.questions[-1].answers[-1].is_retry
+    )
+    refresh()
+
+
+def _render_unfinished(active, state: dict, refresh) -> None:
+    """Slim resume line shown at the top of the section that owns the session."""
+    preset = get_preset(active.preset_key, active.mode)
+    with ui.row().classes("interview-unfinished"):
+        ui.label(
+            f"Unfinished: {_display_label(preset)} · {active.topic} · "
+            f"question {len(active.questions)} of {active.target_questions}"
+        ).classes("interview-unfinished-label")
+        ui.button(
+            "Resume", on_click=lambda: _resume_session(state, refresh, active),
+        ).props("flat dense no-caps").classes("interview-textlink")
+
+
 def _render_home(state: dict, refresh, app_state=None) -> None:
     summary = performance_summary()
     active_views = [view for view in (app_state.topic_views if app_state else []) if not view.archived]
+    active = next(
+        (s for s in load_database().sessions if s.status == "active" and s.questions), None
+    )
+    active_section = ""
+    if active is not None:
+        active_section = _home_section_for(get_preset(active.preset_key, active.mode).key)
     with ui.row().style("align-items:flex-start; justify-content:space-between; gap:0.75rem; flex-wrap:wrap; width:100%;"):
         with ui.column().style("gap:0.15rem;"):
-            ui.label("INTERVIEW PRACTICE").classes("interview-kicker")
+            ui.label("PRACTICE").classes("interview-kicker")
             ui.label("Think out loud. Defend the answer.").style(
                 "font-size:1.15rem; font-weight:700; color:var(--text-primary);"
             )
         primary_action = ui.button(
-            "Surprise Me (Views)" if active_views else "Start Practicing",
+            "Surprise Me (Views)" if active_views else "Practice Weak Spots",
             icon="shuffle" if active_views else "psychology",
         ).classes("submit-btn")
 
     _render_practice_pulse(app_state)
 
     def weakness_setup() -> None:
-        state["weakness_setup"] = True
-        state["selected_preset"] = "weaknesses"
-        refresh()
+        _open_short_setup(state, refresh, "weaknesses")
 
     def surprise() -> None:
         """Pick one active My View and open a ready-to-start practice session."""
@@ -455,32 +546,31 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
     primary_action.on("click", surprise if active_views else weakness_setup)
 
     if active_views:
-        _render_views_quick_start(state, refresh, app_state)
-
-    _render_quant_practice_card(state, refresh)
-
-    active = next((s for s in load_database().sessions if s.status == "active" and s.questions), None)
-    if active:
-        active_preset = get_preset(active.preset_key, active.mode)
+        _render_views_quick_start(
+            state, refresh, app_state,
+            unfinished=active if active_section == "views" else None,
+        )
+    elif active is not None and active_section == "views":
+        # No active Views left, but a My View session is still unfinished.
         with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
-            ui.label("CONTINUE WHERE YOU LEFT OFF").classes("interview-kicker")
-            ui.label(
-                f"{active_preset.label} · {active.topic} · question {len(active.questions)} of {active.target_questions}"
-            ).style("font-size:0.86rem;font-weight:700;margin-top:0.35rem;")
-            ui.label(f"Model · {active.model or interview_model()}").classes("interview-meta")
+            ui.label("MY VIEWS").classes("interview-kicker")
+            _render_unfinished(active, state, refresh)
 
-            def resume() -> None:
-                state["session"] = active
-                state["pending"] = active.pending_move or None
-                state["retrying"] = bool(
-                    active.questions[-1].answers and active.questions[-1].answers[-1].is_retry
-                )
-                refresh()
+    _render_quant_review(
+        state, refresh, active=active if active_section == "quant" else None,
+    )
+    _render_interview_prep(
+        state, refresh, active=active if active_section == "interview" else None,
+    )
 
-            ui.button("Resume Session", on_click=resume).classes("submit-btn").style("margin-top:0.7rem;")
+    with ui.row().style("width:100%; justify-content:center; margin:0.1rem 0 0.9rem;"):
+        ui.button(
+            "Custom session…", icon="tune",
+            on_click=lambda: (state.update(advanced_setup=True), refresh()),
+        ).props("flat dense no-caps").classes("interview-textlink")
 
     if state["advanced_setup"]:
-        ui.label("ADVANCED SETUP · ALL MODES").classes("interview-kicker").style("margin:0.4rem 0 0.65rem;")
+        ui.label("CUSTOM SESSION · ALL MODES").classes("interview-kicker").style("margin:0.4rem 0 0.65rem;")
         with ui.row().style("gap:0.75rem; width:100%; align-items:stretch; flex-wrap:wrap; margin-bottom:1rem;"):
             for preset in (
                 item for key, item in PRESETS.items()
@@ -504,6 +594,8 @@ def _render_home(state: dict, refresh, app_state=None) -> None:
 async def _launch_quant_fundamentals(
     state: dict, refresh, *, button=None, status=None,
     button_label: str = "Quant Fundamentals",
+    target_questions: int | None = None,
+    model: str = "",
 ) -> None:
     if not llm_available():
         if status is not None:
@@ -513,7 +605,7 @@ async def _launch_quant_fundamentals(
         button.disable()
         button.set_text("Preparing first question…")
     preset = get_preset("quant_drill")
-    chosen_model = preferred_model() or interview_model()
+    chosen_model = model or preferred_model() or interview_model()
     save_preferred_model(chosen_model)
     try:
         session = await run.io_bound(lambda: start_session(
@@ -521,7 +613,7 @@ async def _launch_quant_fundamentals(
             topic="Quant fundamentals",
             initial_question=random.choice(QUANT_FUNDAMENTALS_OPENERS),
             practice_style="Fundamentals",
-            target_questions=preset.default_questions,
+            target_questions=target_questions or preset.default_questions,
             model=chosen_model,
         ))
     except Exception as exc:
@@ -531,7 +623,7 @@ async def _launch_quant_fundamentals(
             button.enable()
             button.set_text(button_label)
         return
-    state.update(session=session, pending=None, retrying=False, models_setup=None)
+    state.update(session=session, pending=None, retrying=False, models_setup=None, short_setup=None)
     refresh()
 
 
@@ -614,55 +706,271 @@ async def _start_view_surprise(
     refresh()
 
 
-def _render_quant_practice_card(state: dict, refresh) -> None:
+def _render_quant_review(state: dict, refresh, active=None) -> None:
     notes = scan_model_notes()
     status_text = _library_status_text(models_folder_path(), notes)
 
-    def open_library(mode: str) -> None:
-        state["models_setup"] = {"mode": mode}
-        if mode == "compare":
-            state["compare_sel"] = []
+    def open_library() -> None:
+        state.update(models_setup={"mode": "explain"}, short_setup=None)
+        state["compare_sel"] = []
         refresh()
-
-    async def start_fundamentals() -> None:
-        await _launch_quant_fundamentals(
-            state, refresh, button=fundamentals_btn, status=status,
-        )
 
     async def surprise_quant() -> None:
         await _launch_quant_surprise(
-            state, refresh, button=surprise_btn, status=status,
+            state, refresh, button=surprise_btn, status=status, button_label="Surprise me",
         )
 
     with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
-        ui.label("QUANT PRACTICE").classes("interview-kicker")
-        ui.label("Pick one of your model notes and start speaking in seconds — explain, defend, compare, or go deep.").classes(
-            "interview-meta"
-        ).style("margin:.3rem 0 .7rem;")
+        if active is not None:
+            _render_unfinished(active, state, refresh)
+        ui.label("QUANT REVIEW").classes("interview-kicker")
+        ui.label(
+            "Explain or defend your model notes, drill fundamentals, or attack your weak spots."
+        ).classes("interview-meta").style("margin:.3rem 0 .7rem;")
         with ui.row().classes("interview-quant-row"):
-            ui.label("MY MODELS").classes("interview-kicker").style("min-width:5.4rem;")
-            for mode, label in (
-                ("explain", "Explain My Model"), ("defend", "Defend My Model"),
-                ("compare", "Compare Models"), ("deep_dive", "Deep Dive"),
-            ):
-                model_btn = ui.button(label, on_click=lambda _, m=mode: open_library(m)).props("no-caps")
-                if not notes:
-                    model_btn.disable()
-            ui.space()
-            ui.button("Refresh Models", icon="refresh", on_click=lambda: refresh()).props(
-                "flat dense no-caps"
-            ).style("color:var(--text-muted);font-size:.72rem;")
-        ui.label(status_text).classes("interview-meta").style("margin-bottom:.35rem;")
-        with ui.row().classes("interview-quant-row"):
-            ui.label("GENERAL").classes("interview-kicker").style("min-width:5.4rem;")
-            fundamentals_btn = ui.button("Quant Fundamentals", on_click=start_fundamentals).props("no-caps")
-            surprise_btn = ui.button(
-                "Surprise Me (Quant)", icon="shuffle", on_click=surprise_quant,
+            ui.button("My Models", icon="menu_book", on_click=open_library).props("no-caps")
+            surprise_btn = ui.button(icon="shuffle").props("flat dense no-caps")
+            surprise_btn.tooltip("Surprise me")
+            surprise_btn.on("click", surprise_quant)
+            ui.button(
+                "Quant Drill", on_click=lambda: _open_short_setup(state, refresh, "quant_drill"),
             ).props("no-caps")
-        with ui.row().classes("interview-quant-row"):
-            ui.label("CUSTOM").classes("interview-kicker").style("min-width:5.4rem;")
-            ui.button("Advanced Setup", icon="tune", on_click=lambda: (state.update(advanced_setup=True), refresh())).props("no-caps")
+            ui.button(
+                "Weak Spots", on_click=lambda: _open_short_setup(state, refresh, "weaknesses"),
+            ).props("no-caps")
+        ui.label(status_text).classes("interview-meta").style("margin-bottom:.35rem;")
+        if state.get("short_setup") in _QUANT_SHORT_SETUPS:
+            _render_short_setup(state, refresh)
         status = ui.label("").style("color:#f87171; font-size:.75rem; min-height:1rem; margin-top:.3rem;")
+
+
+def _render_interview_prep(state: dict, refresh, active=None) -> None:
+    def remember(_=None) -> None:
+        state["interview_prep_open"] = bool(expansion.value)
+
+    open_now = bool(active) or bool(state.get("interview_prep_open"))
+    with ui.element("div").classes("interview-card"):
+        expansion = ui.expansion(
+            "INTERVIEW PREP",
+            caption="Job interview, research defense, or a timed readiness check",
+            icon="record_voice_over", value=open_now, on_value_change=remember,
+        ).classes("w-full").props('header-class="interview-prep-title"')
+        with expansion:
+            if active is not None:
+                _render_unfinished(active, state, refresh)
+            with ui.row().classes("interview-quant-row"):
+                ui.button(
+                    "Job Interview",
+                    on_click=lambda: _open_short_setup(state, refresh, "job_interview"),
+                ).props("no-caps")
+                ui.button(
+                    "Research Defense",
+                    on_click=lambda: _open_short_setup(state, refresh, "research_defense"),
+                ).props("no-caps")
+                ui.button(
+                    "Readiness Check",
+                    on_click=lambda: _open_short_setup(state, refresh, "maintenance_20"),
+                ).props("no-caps")
+            if state.get("short_setup") in _PREP_SHORT_SETUPS:
+                _render_short_setup(state, refresh)
+
+
+def _render_short_setup(state: dict, refresh) -> None:
+    """The small "how" panel that opens under a Practice-home section row.
+
+    Every short setup offers a "Use last setup" prefill and a compact
+    "Graded by <model> · Change" footer; Start runs the same start_session()
+    calls the equivalent full setup ran before.
+    """
+    key = state.get("short_setup") or ""
+    if key not in _SHORT_SETUPS:
+        state["short_setup"] = None
+        return
+    preset = get_preset(key)
+    default_model = preferred_model() or interview_model()
+    has_role = key == "job_interview"
+    has_topic = key not in {"weaknesses", "job_interview"}
+    has_materials = key in {"job_interview", "research_defense"}
+    has_time = key in {"maintenance_20", "diagnostic_60"}
+
+    def current_key() -> str:
+        if has_time:
+            return str(time_toggle.value or key)
+        return key
+
+    def change_time(_=None) -> None:
+        selection = current_key()
+        title.set_text(f"{_display_label(get_preset(selection)).upper()} · SETUP")
+        questions.value = get_preset(selection).default_questions
+        if _last_session_for(selection) is None:
+            use_btn.disable()
+        else:
+            use_btn.enable()
+
+    def prefill() -> None:
+        session = _last_session_for(current_key())
+        if session is None:
+            return
+        if has_role:
+            role.value = session.role or ""
+        if has_topic:
+            topic.value = "" if (
+                key == "quant_drill" and session.topic.strip() == "Quant fundamentals"
+            ) else (session.topic or "")
+        if has_materials:
+            materials.value = session.materials or ""
+        questions.value = session.target_questions
+
+    with ui.element("div").classes("interview-short-setup"):
+        title = ui.label(f"{_display_label(preset).upper()} · SETUP").classes("interview-kicker")
+        ui.label(preset.description).classes("interview-meta").style("margin:.25rem 0 .5rem;")
+        with ui.row().style("gap:.75rem; width:100%; align-items:flex-start; flex-wrap:wrap;"):
+            if has_role:
+                with ui.column().style("gap:0; flex:1; min-width:220px;"):
+                    _label("ROLE")
+                    role = ui.input(placeholder="Quant researcher, investment role…").classes("w-full dark-input")
+            if has_topic:
+                with ui.column().style("gap:0; flex:2; min-width:260px;"):
+                    _label("TOPIC")
+                    topic = ui.input(
+                        placeholder="Blank = fundamentals" if key == "quant_drill"
+                        else "Macro, statistics, portfolio construction…"
+                    ).classes("w-full dark-input")
+        if has_materials:
+            _label("JOB DESCRIPTION / MATERIALS (OPTIONAL)" if has_role else "MATERIALS (OPTIONAL)")
+            materials = ui.textarea(
+                placeholder="Paste a resume claim, job description, thesis, or research excerpt."
+            ).classes("w-full dark-input")
+        with ui.row().style("gap:.75rem; width:100%; align-items:flex-start; flex-wrap:wrap; margin-top:.5rem;"):
+            if has_time:
+                with ui.column().style("gap:0;"):
+                    _label("LENGTH")
+                    time_toggle = ui.toggle(
+                        {"maintenance_20": "20 min", "diagnostic_60": "60 min"},
+                        value=key, on_change=change_time,
+                    ).props("no-caps")
+            with ui.column().style("gap:0;"):
+                _label("QUESTIONS")
+                questions = ui.number(
+                    value=preset.default_questions, min=1, max=50,
+                ).classes("dark-input").style("width:140px;")
+
+        with ui.row().style("gap:.45rem; align-items:center; margin-top:.65rem; flex-wrap:wrap;"):
+            use_btn = ui.button("Use last setup", icon="history").props(
+                "flat dense no-caps"
+            ).classes("interview-textlink")
+            if _last_session_for(key) is None:
+                use_btn.disable()
+                use_btn.tooltip("No earlier session with this setup yet.")
+            ui.space()
+            graded = ui.label(f"Graded by {default_model}").classes("interview-meta")
+            change_btn = ui.button("Change").props("flat dense no-caps").classes("interview-textlink")
+            model_select = ui.select(
+                list(dict.fromkeys([default_model, *selectable_models()])),
+                value=default_model,
+            ).classes("dark-input").style("min-width:240px;")
+            model_select.visible = False
+
+            def reveal_model() -> None:
+                change_btn.visible = False
+                model_select.visible = True
+
+            def change_model(_=None) -> None:
+                graded.set_text(f"Graded by {model_select.value or default_model}")
+
+            use_btn.on("click", prefill)
+            change_btn.on("click", reveal_model)
+            model_select.on("update:model-value", change_model)
+
+        with ui.row().style("gap:.55rem; margin-top:.7rem; align-items:center;"):
+            start_btn = ui.button("Start", icon="play_arrow").classes("submit-btn")
+            ui.button(
+                "Cancel", on_click=lambda: (state.update(short_setup=None), refresh()),
+            ).classes("cancel-btn")
+        status = ui.label("").style("color:#f87171; font-size:.75rem; min-height:1rem; margin-top:.4rem;")
+
+        async def start() -> None:
+            if not llm_available():
+                status.set_text("Configure an LLM provider and API key in Settings, then restart the app.")
+                return
+            count = int(questions.value or preset.default_questions)
+            chosen_model = model_select.value or default_model
+            if key == "quant_drill":
+                text = (topic.value or "").strip()
+                if not text:
+                    await _launch_quant_fundamentals(
+                        state, refresh, button=start_btn, status=status,
+                        button_label="Start", target_questions=count, model=chosen_model,
+                    )
+                    return
+                await _start_short_session(
+                    state, refresh, preset_key="quant_drill", topic=text,
+                    target_questions=count, model=chosen_model,
+                    button=start_btn, status=status,
+                )
+                return
+            if key == "weaknesses":
+                await _start_short_session(
+                    state, refresh, preset_key="weaknesses", topic="Focus areas",
+                    target_questions=count, model=chosen_model, weakness_session=True,
+                    button=start_btn, status=status,
+                )
+                return
+            if key == "job_interview":
+                role_text = (role.value or "").strip()
+                await _start_short_session(
+                    state, refresh, preset_key="job_interview",
+                    topic=role_text or preset.label,
+                    role=role_text, materials=(materials.value or "").strip(),
+                    target_questions=count, model=chosen_model,
+                    button=start_btn, status=status,
+                )
+                return
+            selection = current_key()
+            await _start_short_session(
+                state, refresh, preset_key=selection,
+                topic=(topic.value or "").strip() or get_preset(selection).label,
+                materials=(materials.value or "").strip() if has_materials else "",
+                target_questions=count, model=chosen_model,
+                button=start_btn, status=status,
+            )
+
+        start_btn.on("click", start)
+
+
+async def _start_short_session(
+    state: dict, refresh, *, preset_key: str, topic: str, target_questions: int,
+    model: str, role: str = "", materials: str = "", weakness_session: bool = False,
+    button=None, status=None, button_label: str = "Start",
+) -> None:
+    """Start a Practice-home short setup with today's plain start_session call."""
+    if not llm_available():
+        if status is not None:
+            status.set_text("Configure an LLM provider and API key in Settings, then restart the app.")
+        return
+    preset = get_preset(preset_key)
+    chosen_model = model or interview_model()
+    save_preferred_model(chosen_model)
+    if button is not None:
+        button.disable()
+        button.set_text("Preparing first question…")
+    try:
+        session = await run.io_bound(lambda: start_session(
+            mode=preset.mode, preset_key=preset.key,
+            topic=topic, role=role, materials=materials,
+            target_questions=target_questions,
+            weakness_session=weakness_session,
+            model=chosen_model,
+        ))
+    except Exception as exc:
+        if status is not None:
+            status.set_text(f"Could not start: {exc}")
+        if button is not None:
+            button.enable()
+            button.set_text(button_label)
+        return
+    state.update(session=session, pending=None, retrying=False, short_setup=None)
+    refresh()
 
 
 async def _start_model_session(
@@ -713,6 +1021,12 @@ def _render_model_library(state: dict, refresh) -> None:
 
     def go_back() -> None:
         state.update(models_setup=None, quant_session_note=None, compare_sel=[])
+        refresh()
+
+    def switch_mode(target: str) -> None:
+        state.update(models_setup={"mode": target})
+        if target != "compare":
+            state["compare_sel"] = []
         refresh()
 
     def render_compare_bar() -> None:
@@ -801,6 +1115,11 @@ def _render_model_library(state: dict, refresh) -> None:
         with ui.row().style("justify-content:space-between;align-items:center;width:100%;gap:.6rem;flex-wrap:wrap;"):
             ui.label(f"MY MODELS · {_MODEL_MODE_LABELS[mode]}").classes("interview-kicker")
             with ui.row().style("gap:.4rem;"):
+                ui.button(
+                    "Stop comparing" if mode == "compare" else "Compare two…",
+                    icon="compare_arrows",
+                    on_click=lambda: switch_mode("explain" if mode == "compare" else "compare"),
+                ).props("flat dense no-caps").style("color:var(--text-muted);font-size:.72rem;")
                 ui.button("Refresh Models", icon="refresh", on_click=lambda: refresh()).props(
                     "flat dense no-caps"
                 ).style("color:var(--text-muted);font-size:.72rem;")
@@ -812,7 +1131,7 @@ def _render_model_library(state: dict, refresh) -> None:
         if not notes:
             ui.label(
                 "No model notes are available, so model practice is disabled here. "
-                "The drills under GENERAL on the Practice home still work."
+                "The Quant Drill and Weak Spots drills on the Practice home still work."
             ).classes("interview-list-item")
             return
         search = ui.input(placeholder="Filter by title or tag…").classes("w-full dark-input").props("dense")
@@ -914,7 +1233,7 @@ def _sparkline_svg(series: list[dict]) -> str:
     )
 
 
-def _render_views_quick_start(state: dict, refresh, app_state) -> None:
+def _render_views_quick_start(state: dict, refresh, app_state, unfinished=None) -> None:
     if app_state is None:
         return
     active = [view for view in app_state.topic_views if not view.archived]
@@ -1062,6 +1381,8 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
                 go.on("click", lambda v=view: start_view(v))
 
     with ui.element("div").classes("interview-card").style("border-color:var(--accent);"):
+        if unfinished is not None:
+            _render_unfinished(unfinished, state, refresh)
         with ui.row().style(
             "width:100%; align-items:flex-start; justify-content:space-between; "
             "gap:0.5rem; flex-wrap:wrap; margin-bottom:0.15rem;"
@@ -1978,6 +2299,7 @@ def _render_postmortem_inner(session, state: dict, refresh) -> None:
         state.update(
             session=None, pending=None, retrying=False,
             weakness_setup=False, selected_preset=None, reference_open=None,
+            short_setup=None,
         )
         refresh()
 
