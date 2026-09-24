@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# v2 marks the anchored scoring rubric (see interview_controller.SCORE_RUBRIC).
+# v2 marked the anchored scoring rubric (see interview_controller.RUBRICS).
 # Scores before v2 used no rubric and are not comparable with v2 scores.
-PROMPT_PACK_VERSION = "2026.09.22-v2"
+LEGACY_V2_PROMPT_PACK = "2026.09.22-v2"
+# v3 splits the shared score into three rubric families (argument, technical,
+# interview). v2 sessions keep their own legacy rubric id when read.
+PROMPT_PACK_VERSION = "2026.09.24-v3"
 
 BASE_INTERVIEWER_PROMPT = """You are an interview sparring partner.
 
@@ -64,6 +67,9 @@ class InterviewPreset:
     description: str
     default_questions: int
     prompt: str
+    # Which rubric family grades this preset: "argument", "technical", or
+    # "interview". Every preset sets one explicitly (see interview_controller.RUBRICS).
+    rubric_family: str
 
 
 PRESET_20_MINUTE_MAINTENANCE = """# PRESET: 20-MINUTE MAINTENANCE
@@ -305,19 +311,19 @@ QUANT_FUNDAMENTALS_OPENERS: tuple[str, ...] = (
 
 
 PRESETS: dict[str, InterviewPreset] = {
-    "view_deliver": InterviewPreset("view_deliver", "Deliver", "Discussion", "Give the initial 2–5 minute answer from memory.", 1, PRESET_VIEW_DELIVER),
-    "view_discuss": InterviewPreset("view_discuss", "Discuss", "Discussion", "Have a natural investment conversation grounded in your View.", 6, PRESET_VIEW_DISCUSS),
-    "view_defend": InterviewPreset("view_defend", "Defend", "Research Defense", "Pressure-test the weakest parts of your View.", 8, PRESET_VIEW_DEFEND),
-    "maintenance_20": InterviewPreset("maintenance_20", "20-Minute Maintenance", "Discussion", "Stay fluent with a serious conversation that gets progressively harder.", 10, PRESET_20_MINUTE_MAINTENANCE),
-    "diagnostic_60": InterviewPreset("diagnostic_60", "60-Minute Diagnostic", "Simulation", "A broad readiness check with deep dives, pressure, and diagnosis.", 24, PRESET_60_MINUTE_DIAGNOSTIC),
-    "quant_drill": InterviewPreset("quant_drill", "Quant Drill", "Drill", "Fast technical retrieval, applied reasoning, scoring, and concise critique.", 12, PRESET_QUANT_DRILL),
-    "job_interview": InterviewPreset("job_interview", "Job Interview", "Simulation", "A realistic interview grounded in a role and supplied materials.", 14, PRESET_JOB_INTERVIEW),
-    "research_defense": InterviewPreset("research_defense", "Research Defense", "Research Defense", "Aggressive scrutiny of a thesis, model, project, or claim.", 12, PRESET_RESEARCH_DEFENSE),
-    "weaknesses": InterviewPreset("weaknesses", "Start Practicing", "Drill", "Build confidence with tailored practice and fresh question variants.", 12, PRESET_PRACTICE_WEAKNESSES),
-    "model_explain": InterviewPreset("model_explain", "Explain a Model", "Drill", "Walk an interviewer from intuition to failure modes for a technique you claim to know.", 8, PRESET_MODEL_EXPLAIN),
-    "model_defend": InterviewPreset("model_defend", "Defend a Model", "Drill", "Aggressive scrutiny of a technique you claim to use: assumptions, estimation, validation, failure modes.", 10, PRESET_MODEL_DEFEND),
-    "model_compare": InterviewPreset("model_compare", "Compare Models", "Drill", "Defend model-selection judgment between two techniques, grounded in real trade-offs.", 8, PRESET_MODEL_COMPARE),
-    "model_deep_dive": InterviewPreset("model_deep_dive", "Deep Dive", "Drill", "Technical interrogation of objective, estimation, math, hyperparameters, and complexity.", 10, PRESET_MODEL_DEEP_DIVE),
+    "view_deliver": InterviewPreset("view_deliver", "Deliver", "Discussion", "Give the initial 2–5 minute answer from memory.", 1, PRESET_VIEW_DELIVER, "argument"),
+    "view_discuss": InterviewPreset("view_discuss", "Discuss", "Discussion", "Have a natural investment conversation grounded in your View.", 6, PRESET_VIEW_DISCUSS, "argument"),
+    "view_defend": InterviewPreset("view_defend", "Defend", "Research Defense", "Pressure-test the weakest parts of your View.", 8, PRESET_VIEW_DEFEND, "argument"),
+    "maintenance_20": InterviewPreset("maintenance_20", "20-Minute Maintenance", "Discussion", "Stay fluent with a serious conversation that gets progressively harder.", 10, PRESET_20_MINUTE_MAINTENANCE, "argument"),
+    "diagnostic_60": InterviewPreset("diagnostic_60", "60-Minute Diagnostic", "Simulation", "A broad readiness check with deep dives, pressure, and diagnosis.", 24, PRESET_60_MINUTE_DIAGNOSTIC, "argument"),
+    "quant_drill": InterviewPreset("quant_drill", "Quant Drill", "Drill", "Fast technical retrieval, applied reasoning, scoring, and concise critique.", 12, PRESET_QUANT_DRILL, "technical"),
+    "job_interview": InterviewPreset("job_interview", "Job Interview", "Simulation", "A realistic interview grounded in a role and supplied materials.", 14, PRESET_JOB_INTERVIEW, "interview"),
+    "research_defense": InterviewPreset("research_defense", "Research Defense", "Research Defense", "Aggressive scrutiny of a thesis, model, project, or claim.", 12, PRESET_RESEARCH_DEFENSE, "argument"),
+    "weaknesses": InterviewPreset("weaknesses", "Start Practicing", "Drill", "Build confidence with tailored practice and fresh question variants.", 12, PRESET_PRACTICE_WEAKNESSES, "technical"),
+    "model_explain": InterviewPreset("model_explain", "Explain a Model", "Drill", "Walk an interviewer from intuition to failure modes for a technique you claim to know.", 8, PRESET_MODEL_EXPLAIN, "technical"),
+    "model_defend": InterviewPreset("model_defend", "Defend a Model", "Drill", "Aggressive scrutiny of a technique you claim to use: assumptions, estimation, validation, failure modes.", 10, PRESET_MODEL_DEFEND, "technical"),
+    "model_compare": InterviewPreset("model_compare", "Compare Models", "Drill", "Defend model-selection judgment between two techniques, grounded in real trade-offs.", 8, PRESET_MODEL_COMPARE, "technical"),
+    "model_deep_dive": InterviewPreset("model_deep_dive", "Deep Dive", "Drill", "Technical interrogation of objective, estimation, math, hyperparameters, and complexity.", 10, PRESET_MODEL_DEEP_DIVE, "technical"),
 }
 
 LEGACY_MODE_PRESETS = {

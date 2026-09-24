@@ -23,7 +23,9 @@ from services import interview_controller as controller
 from services.interview_controller import (
     EVAL_MAX_TOKENS,
     FALLBACK_FOLLOW_UP,
+    RUBRICS,
     _evaluation_schema,
+    band_visible,
     evaluate_answer,
     session_band,
     start_session,
@@ -32,12 +34,18 @@ from services.interview_llm import (
     CompletionOptions, InterviewOutputError, InterviewProviderError,
     OpenAICompatibleProvider,
 )
-from services.interview_prompts import PRESETS, PROMPT_PACK_VERSION
+from services.interview_prompts import (
+    LEGACY_V2_PROMPT_PACK, PRESETS, PROMPT_PACK_VERSION,
+)
 from storage import interview_store as store
 from storage.interview_store import (
     InterviewHistoryUnreadable,
+    comparability_key,
+    effective_input_method,
+    effective_rubric_id,
     load_database,
     save_session,
+    trend_eligible,
 )
 
 
@@ -558,6 +566,165 @@ def test_mark_review_never_receives_a_missing_score() -> None:
     print("PASS: mark_review never received a missing score")
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 batch A (Tasks 1-2): provenance, comparability, and rubric families.
+# ---------------------------------------------------------------------------
+
+
+def test_p1_legacy_rubric_ids_and_history_untouched() -> None:
+    history = _temp_history_file()
+    _patch_history_file(history)
+    payload = {
+        "preferred_model": "z-ai/glm-5.3",
+        "sessions": [
+            {
+                "id": "p1-v2", "mode": "Drill", "topic": "Term premium",
+                "status": "completed", "prompt_pack_version": LEGACY_V2_PROMPT_PACK,
+            },
+            {
+                "id": "p1-old", "mode": "Drill", "topic": "Rates",
+                "status": "completed", "prompt_pack_version": "2025.01.01-v1",
+            },
+        ],
+    }
+    history.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    before = history.read_bytes()
+
+    database = load_database()
+    by_id = {session.id: session for session in database.sessions}
+    assert by_id["p1-v2"].rubric_id == "", "a legacy session must load with no stored rubric_id"
+    assert effective_rubric_id(by_id["p1-v2"]) == "shared-v2"
+    assert effective_rubric_id(by_id["p1-old"]) == "unanchored"
+    assert history.read_bytes() == before, "reading must never rewrite the history file"
+    print("PASS: P1 legacy rubric ids derive as shared-v2 / unanchored and history is byte-identical")
+
+
+def test_p2_input_method_derives_and_records() -> None:
+    assert effective_input_method(InterviewAnswer(text="legacy", voice=True)) == "voice"
+    assert effective_input_method(InterviewAnswer(text="typed")) == "typed"
+
+    session = _new_session()
+    provider = FakeProvider([_json({
+        "score": 7, "critique": "Mechanism missing.", "fix": "Show the chain.",
+        "next_question": "Why?",
+    })])
+    updated, _ = evaluate_answer(
+        session.id, "My spoken answer.", voice_origin=True, provider=provider,
+    )
+    answer = updated.questions[-1].answers[-1]
+    assert answer.input_method == "voice", "a voice-origin answer must store input_method=voice"
+    assert answer.voice is True
+    assert effective_input_method(answer) == "voice"
+    assert comparability_key(updated, answer) == (
+        "technical-v3", "test-model", "quant_drill", "voice",
+    )
+    print("PASS: P2 input method derives from voice and new answers store it")
+
+
+def test_p3_trend_eligible_rejects_incomparable_answers() -> None:
+    def session_with(**answer_kwargs) -> tuple[InterviewSession, InterviewAnswer]:
+        answer = InterviewAnswer(text="x", **answer_kwargs)
+        session = InterviewSession(
+            mode="Drill", topic="Term premium", status="completed",
+            rubric_id="argument-v3",
+            questions=[InterviewQuestion(text="q", answers=[answer])],
+        )
+        return session, answer
+
+    cases = {
+        "retry": session_with(score=7, is_retry=True),
+        "no score": session_with(score=None),
+        "active session": (
+            InterviewSession(
+                mode="Drill", topic="Term premium", status="active",
+                rubric_id="argument-v3",
+                questions=[InterviewQuestion(
+                    text="q", answers=[InterviewAnswer(text="x", score=7)],
+                )],
+            ),
+            None,
+        ),
+    }
+    for label, (session, answer) in cases.items():
+        answer = answer or session.questions[0].answers[0]
+        assert not trend_eligible(session, answer), label
+
+    custom, custom_answer = session_with(score=8)
+    custom.rubric_id = "custom"
+    assert not trend_eligible(custom, custom_answer), "custom session"
+
+    unanchored, unanchored_answer = session_with(score=8)
+    unanchored.rubric_id = "unanchored"
+    assert not trend_eligible(unanchored, unanchored_answer), "unanchored session"
+
+    eligible, eligible_answer = session_with(score=7)
+    assert trend_eligible(eligible, eligible_answer), "a scored non-retry v3 answer is eligible"
+    print("PASS: P3 trend_eligible is false for retries, missing scores, custom, unanchored, and active")
+
+
+def test_p4_presets_have_a_family_and_family_rubric() -> None:
+    families = {"argument", "technical", "interview"}
+    for key, preset in PRESETS.items():
+        family = preset.rubric_family
+        assert family in families, f"{key} has rubric_family={family!r}"
+        schema = _evaluation_schema(final_turn=False, rubric_family=family)
+        score_desc = schema["score"]
+        assert RUBRICS[family][1] in score_desc, f"{key} schema must carry its own rubric"
+        for other in families - {family}:
+            assert RUBRICS[other][1] not in score_desc, f"{key} schema leaked {other} rubric"
+    print("PASS: P4 every preset has a family and its own rubric text, not the others'")
+
+
+def test_p5_start_session_stores_family_rubric_id() -> None:
+    _patch_history_file(_temp_history_file())
+    argument = start_session(
+        mode="Discussion", topic="Term premium", preset_key="view_deliver", target_questions=3,
+    )
+    technical = start_session(
+        mode="Drill", topic="Term premium", preset_key="quant_drill", target_questions=3,
+    )
+    interview = start_session(
+        mode="Simulation", topic="Term premium", preset_key="job_interview", target_questions=3,
+    )
+    custom = start_session(
+        mode="Discussion", topic="Term premium", preset_key="view_deliver",
+        target_questions=3, prompt_override="Act as my own interviewer.",
+    )
+    assert argument.rubric_id == "argument-v3"
+    assert technical.rubric_id == "technical-v3"
+    assert interview.rubric_id == "interview-v3"
+    assert custom.rubric_id == "custom", "a prompt override must be marked custom"
+    print("PASS: P5 start_session stores each family rubric id and custom for overrides")
+
+
+def test_p6_band_gate_keeps_phase1_and_hides_incomparable() -> None:
+    assert PROMPT_PACK_VERSION != LEGACY_V2_PROMPT_PACK, "Task 2 must bump the prompt pack"
+
+    def session(**overrides) -> InterviewSession:
+        params = {
+            "mode": "Drill", "topic": "Term premium", "status": "completed",
+            "prompt_pack_version": LEGACY_V2_PROMPT_PACK,
+            "questions": [InterviewQuestion(
+                text="q", answers=[InterviewAnswer(text="x", score=8)],
+            )],
+            "postmortem": InterviewPostmortem(
+                overall_performance="ok", biggest_problems=["p"],
+                strongest_areas=["s"], concepts_to_repeat=["c"], status="ok",
+            ),
+        }
+        params.update(overrides)
+        return InterviewSession(**params)
+
+    phase1 = session()
+    assert band_visible(phase1), "a Phase 1 anchored session still shows its band"
+    assert session_band(phase1) is not None
+
+    assert not band_visible(session(prompt_override="Custom.")), "custom sessions hide the band"
+    assert not band_visible(session(prompt_pack_version="2025.01.01-v1")), \
+        "unanchored sessions hide the band"
+    print("PASS: P6 band shows for Phase 1 and hides for custom and unanchored sessions")
+
+
 def main() -> None:
     print("Validating interview practice persistence and evaluation...\n")
     _install_controller_stubs()
@@ -583,6 +750,12 @@ def main() -> None:
     test_provider_failure_surfaces_and_saves_nothing()
     test_session_band_excludes_retries_and_hides_when_missing()
     test_mark_review_never_receives_a_missing_score()
+    test_p1_legacy_rubric_ids_and_history_untouched()
+    test_p2_input_method_derives_and_records()
+    test_p3_trend_eligible_rejects_incomparable_answers()
+    test_p4_presets_have_a_family_and_family_rubric()
+    test_p5_start_session_stores_family_rubric_id()
+    test_p6_band_gate_keeps_phase1_and_hides_incomparable()
     print("\nAll validation scenarios passed.")
 
 

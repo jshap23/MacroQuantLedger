@@ -36,6 +36,10 @@ class InterviewAnswer(BaseModel):
     # transcript rather than typed. Used to scope the grader's transcription
     # safety net and to keep voice-vs-typed grading auditable.
     voice: bool = False
+    # Phase 2 provenance: "voice" or "typed" as recorded at submit time. Plain
+    # str, not Literal, so legacy answers load as "" and derive from ``voice``.
+    # Phase 3 adds "mixed" without a schema change.
+    input_method: str = ""
 
 
 class InterviewQuestion(BaseModel):
@@ -71,6 +75,10 @@ class InterviewSession(BaseModel):
     mode: InterviewMode
     preset_key: str = ""
     prompt_pack_version: str = ""
+    # Which rubric graded this session: "argument-v3"/"technical-v3"/
+    # "interview-v3", or "custom" for a prompt-override session. Plain str, not
+    # Literal, so legacy sessions load as "" and derive their effective id.
+    rubric_id: str = ""
     prompt_override: str = ""
     topic: str
     role: str = ""

@@ -9,8 +9,8 @@ from pathlib import Path
 from nicegui import run, ui
 
 from services.interview_controller import (
-    abandon_session, advance_session, answer_tips, evaluate_answer, reference_answer,
-    session_band, start_session,
+    abandon_session, advance_session, answer_tips, band_visible, evaluate_answer,
+    reference_answer, session_band, start_session,
 )
 from services.interview_llm import (
     InterviewOutputError, InterviewProviderError,
@@ -1793,12 +1793,12 @@ def _render_drill_feedback(session, result: dict, state: dict, refresh) -> None:
 def _render_score_band(session) -> None:
     """Show the session score as its rubric band, never the raw 1-10 integer.
 
-    Only sessions graded under the current rubric version show a band; older
-    sessions render as before, with no band line. New sessions average only
-    first attempts and need enough scored answers; legacy sessions are
-    unchanged, and a missing summary hides the band entirely.
+    The band shows for any real rubric family — Phase 1's anchored v2 sessions
+    included — and is hidden for custom-prompt and unanchored sessions. New
+    sessions average only first attempts and need enough scored answers; a
+    missing summary hides the band entirely.
     """
-    if session.prompt_pack_version != PROMPT_PACK_VERSION:
+    if not band_visible(session):
         return
     band = session_band(session)
     if band is None:

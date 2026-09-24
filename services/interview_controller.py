@@ -14,7 +14,9 @@ from services.interview_llm import (
 from services.interview_prompts import (
     PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
 )
-from storage.interview_store import get_session, mark_review, save_session, weakness_context
+from storage.interview_store import (
+    effective_rubric_id, get_session, mark_review, save_session, weakness_context,
+)
 
 
 # Per-turn token budgets. A first failure is often truncation, so the single
@@ -30,9 +32,12 @@ FALLBACK_FOLLOW_UP = (
 )
 
 
-# Anchored scoring rubric for the shared 1-10 score field. Kept as one constant
-# so the reference-answer prompt can cite the same 7-8 bar without drifting.
-SCORE_RUBRIC = (
+# Anchored scoring rubric, split into three families in Phase 2. All three keep
+# the same 1-10 thresholds and band descriptors as the Phase 1 rubric so
+# session_band() and the postmortem band line are unchanged; only the criteria
+# emphasis differs by question type. rubric_id identifies which family graded a
+# session so scores are only compared like with like.
+_SHARED_RUBRIC = (
     "integer 1-10, graded against this rubric:\n"
     "  1-2  Did not answer the question asked, or the core claim is wrong.\n"
     "  3-4  Relevant content, but no clear bottom line; factors named without mechanism.\n"
@@ -41,27 +46,63 @@ SCORE_RUBRIC = (
     "       with magnitudes; states what would falsify the view.\n"
     "  9-10 All of 7-8, plus handles the strongest counterargument and translates the\n"
     "       view into an implementable decision.\n"
+)
+
+_RUBRIC_CRITERIA = {
+    "argument": (
+        "clear conclusion early; causal mechanism; evidence with magnitudes; "
+        "the key risk or what would change the view; the practical implication."
+    ),
+    "technical": (
+        "correct result or method; reasoning shown in steps; assumptions stated; "
+        "a sanity check or edge case; precise terms."
+    ),
+    "interview": (
+        "answers the question directly; a specific example with the candidate's "
+        "own role; result or impact, quantified where possible; relevance to the "
+        "role; concise."
+    ),
+}
+
+# Grade discipline carried over from Phase 1 so the 7-8 bar does not drift.
+_RUBRIC_DISCIPLINE = (
     "Grade the answer as given, against the rubric. Do not grade on a curve. Do not\n"
     "withhold 7+ from an answer that meets the 7-8 bar. Most practice answers land\n"
     "3-6; that is expected and is not a reason to compress the scale further."
 )
 
-# SCORE_RUBRIC is the only definition of the bands. These patterns read them back
-# out of it so the postmortem can print a band verbatim and never drift from the
-# rubric text.
+_RUBRIC_CLOSING = (
+    "Grade against what this question asks. A narrow follow-up needs a precise "
+    "answer to that follow-up, not a full thesis."
+)
+
+RUBRICS: dict[str, tuple[str, str]] = {
+    family: (
+        f"{family}-v3",
+        f"{_SHARED_RUBRIC}"
+        f"Criteria for this question type: {criteria}\n"
+        f"{_RUBRIC_DISCIPLINE}\n"
+        f"{_RUBRIC_CLOSING}",
+    )
+    for family, criteria in _RUBRIC_CRITERIA.items()
+}
+
+# The five bands are identical across families. These patterns read them back
+# out of the shared block so the postmortem can print a band verbatim and never
+# drift from the rubric text.
 _BAND_LINE = re.compile(r"^ {2}(\d+)-(\d+)\s+(.*)$")
 _BAND_CONT = re.compile(r"^ {7}(\S.*)$")
 
 
 def rubric_bands() -> list[tuple[str, str]]:
-    """The five rubric bands as (label, descriptor), verbatim from SCORE_RUBRIC.
+    """The five rubric bands as (label, descriptor), verbatim from the rubric.
 
     Descriptors wrapped over two source lines are joined with a single space so
     a band can be shown on one line without rewording anything.
     """
     bands: list[tuple[str, str]] = []
     current: list[str] | None = None
-    for line in SCORE_RUBRIC.splitlines():
+    for line in _SHARED_RUBRIC.splitlines():
         match = _BAND_LINE.match(line)
         if match:
             if current:
@@ -123,6 +164,17 @@ def session_band(session: InterviewSession) -> tuple[str, str, str | None] | Non
     if not scores:
         return None
     return rubric_band_for(int(sum(scores) / len(scores) + 0.5))
+
+
+def band_visible(session: InterviewSession) -> bool:
+    """Whether the postmortem band renders for this session.
+
+    Pure and client-free so the gate can be tested directly. Shown for sessions
+    graded under a real rubric family (current or the legacy anchored pack);
+    hidden for custom-prompt and unanchored sessions, whose scores are not
+    comparable.
+    """
+    return effective_rubric_id(session) not in {"unanchored", "custom"}
 
 
 def _system(
@@ -208,11 +260,15 @@ def start_session(
     provider: LLMProvider | None = None,
 ) -> InterviewSession:
     preset = get_preset(preset_key, mode)
+    override = prompt_override.strip()
     session = InterviewSession(
         mode=preset.mode,
         preset_key=preset.key,
         prompt_pack_version=PROMPT_PACK_VERSION,
-        prompt_override=prompt_override.strip(),
+        # A prompt override is graded with the family rubric but marked "custom"
+        # so it is excluded from cross-session trends.
+        rubric_id="custom" if override else RUBRICS[preset.rubric_family][0],
+        prompt_override=override,
         topic=topic.strip() or "General professional interview",
         role=role.strip(),
         focus_areas=focus_areas.strip(),
@@ -356,10 +412,14 @@ class TurnEvaluation(BaseModel):
         return "ok" if self.critique and self.fix else "partial"
 
 
-def _evaluation_schema(final_turn: bool) -> dict:
-    """Keep ordinary turns compact; postmortems belong only to the final turn."""
+def _evaluation_schema(final_turn: bool, rubric_family: str = "argument") -> dict:
+    """Keep ordinary turns compact; postmortems belong only to the final turn.
+
+    The ``score`` description is the family rubric for this question type, so a
+    technical answer is not graded against thesis-shaped criteria.
+    """
     schema = {
-        "score": SCORE_RUBRIC,
+        "score": RUBRICS[rubric_family][1],
         "failure_tags": "array of 0-3 tag strings",
         "critique": (
             "required string, 1-2 sentences, maximum 60 words: the single most "
@@ -499,6 +559,7 @@ def evaluate_answer(
         raise RuntimeError("This practice session is no longer active.")
     question = session.questions[-1]
     final_turn = len(session.questions) >= session.target_questions
+    rubric_family = get_preset(session.preset_key, session.mode).rubric_family
     prompt = {
         "task": "Evaluate privately, then decide the single next interviewer move. Finish if final_turn is true.",
         "current_question": question.text,
@@ -511,7 +572,7 @@ def evaluate_answer(
             "topic": session.topic, "role": session.role,
             "focus_areas": session.focus_areas, "compact_brief": session.compact_brief,
         },
-        "output_schema": _evaluation_schema(final_turn),
+        "output_schema": _evaluation_schema(final_turn, rubric_family),
     }
     llm = provider or default_provider()
     base_tokens = EVAL_FINAL_MAX_TOKENS if final_turn else EVAL_MAX_TOKENS
@@ -590,6 +651,7 @@ def evaluate_answer(
         failure_tags=evaluation.failure_tags, critique=evaluation.critique,
         fix=evaluation.fix, evaluation_status=evaluation.status,
         is_retry=is_retry, voice=voice_origin,
+        input_method="voice" if voice_origin else "typed",
     ))
     mark_review(question, evaluation.score, evaluation.failure_tags, is_retry)
 
@@ -754,7 +816,7 @@ def reference_answer(
         "topic": session.topic,
         "stored_view": session.view_context[:6000],
         "candidate_answer": answer_text[:4000],
-        "target_rubric": SCORE_RUBRIC,
+        "target_rubric": RUBRICS["argument"][1],
     }
     llm = provider or default_provider()
     raw = llm.complete(

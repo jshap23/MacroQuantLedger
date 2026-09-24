@@ -10,8 +10,9 @@ from threading import RLock
 
 from pydantic import ValidationError
 
-from models.interview import InterviewDatabase, InterviewSession
+from models.interview import InterviewAnswer, InterviewDatabase, InterviewSession
 from models.schema import TopicView
+from services.interview_prompts import LEGACY_V2_PROMPT_PACK
 
 
 INTERVIEW_FILE = Path(__file__).resolve().parent.parent / "data" / "interview_history.json"
@@ -94,6 +95,59 @@ def save_session(session: InterviewSession) -> None:
 
 def get_session(session_id: str) -> InterviewSession | None:
     return next((s for s in load_database().sessions if s.id == session_id), None)
+
+
+def effective_rubric_id(session: InterviewSession) -> str:
+    """The rubric a session was graded under, derived for legacy sessions.
+
+    Read-time only: never writes to the session or the history file. A session
+    that stored ``rubric_id`` returns it verbatim. Legacy sessions are classified
+    from what they do record — an explicit prompt override is ``"custom"``, the
+    anchored v2 pack is ``"shared-v2"``, and anything older is ``"unanchored"``.
+    Phase 1 sessions do record ``prompt_override``, so the override case is
+    detectable rather than assumed.
+    """
+    if session.rubric_id:
+        return session.rubric_id
+    if session.prompt_override.strip():
+        return "custom"
+    if session.prompt_pack_version == LEGACY_V2_PROMPT_PACK:
+        return "shared-v2"
+    return "unanchored"
+
+
+def effective_input_method(answer: InterviewAnswer) -> str:
+    """The answer's input method, derived from ``voice`` for legacy answers."""
+    if answer.input_method:
+        return answer.input_method
+    return "voice" if answer.voice else "typed"
+
+
+def comparability_key(
+    session: InterviewSession, answer: InterviewAnswer,
+) -> tuple[str, str, str, str]:
+    """The key under which scores may be compared: rubric, grader, preset, input."""
+    return (
+        effective_rubric_id(session),
+        session.model or "",
+        session.preset_key,
+        effective_input_method(answer),
+    )
+
+
+def trend_eligible(session: InterviewSession, answer: InterviewAnswer) -> bool:
+    """Whether an answer's score may join a trend line.
+
+    Requires a completed session and a scored, non-retry answer whose effective
+    rubric is a real family. Custom-prompt and unanchored sessions are excluded
+    so scores produced under incomparable rubrics are never averaged together.
+    """
+    return (
+        session.status == "completed"
+        and not answer.is_retry
+        and answer.score is not None
+        and effective_rubric_id(session) not in {"custom", "unanchored"}
+    )
 
 
 def preferred_model() -> str:
