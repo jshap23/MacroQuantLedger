@@ -150,6 +150,26 @@ def trend_eligible(session: InterviewSession, answer: InterviewAnswer) -> bool:
     )
 
 
+def trend_session_count() -> int:
+    """Sessions app-wide that contribute a current-rubric comparable score.
+
+    A session counts when at least one of its answers is ``trend_eligible()``
+    and its effective rubric id is a current ``*-v3`` family. This is the global
+    gate for showing trend movement; it is not scoped to any one View.
+    """
+    count = 0
+    for session in load_database().sessions:
+        if not effective_rubric_id(session).endswith("-v3"):
+            continue
+        if any(
+            trend_eligible(session, answer)
+            for question in session.questions
+            for answer in question.answers
+        ):
+            count += 1
+    return count
+
+
 def preferred_model() -> str:
     return load_database().preferred_model
 

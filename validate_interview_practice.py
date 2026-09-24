@@ -56,6 +56,7 @@ from storage.interview_store import (
     save_preferred_model,
     save_session,
     trend_eligible,
+    trend_session_count,
     view_practice_stats,
 )
 
@@ -1201,6 +1202,52 @@ def test_p20_improving_uses_only_the_current_key() -> None:
     print("PASS: P20 the improving flag reflects only the current comparability key")
 
 
+def test_pfix_movement_gates_global_and_per_view() -> None:
+    # Global gate: 10 trend-eligible *-v3 sessions app-wide enable movement;
+    # shared-v2 and custom sessions never count toward the global gate.
+    _patch_history_file(_temp_history_file())
+    for index in range(9):
+        save_session(_completed_session(
+            f"mv-global-{index}",
+            [InterviewQuestion(text="q", answers=[_answer(score=6)])],
+            rubric_id="argument-v3",
+        ))
+    save_session(_completed_session(
+        "mv-shared", [InterviewQuestion(text="q", answers=[_answer(score=6)])],
+        rubric_id="shared-v2",
+    ))
+    save_session(_completed_session(
+        "mv-custom", [InterviewQuestion(text="q", answers=[_answer(score=6)])],
+        rubric_id="custom",
+    ))
+    assert trend_session_count() == 9, "only the v3 sessions count globally"
+    save_session(_completed_session(
+        "mv-global-9", [InterviewQuestion(text="q", answers=[_answer(score=6)])],
+        rubric_id="argument-v3",
+    ))
+    assert trend_session_count() == 10, "the global gate opens at ten v3 sessions"
+
+    # Per-View gate: a delta needs two eligible sessions under the View's key.
+    view_id = "view-mv"
+    first = _completed_session(
+        "mv-view-1", [InterviewQuestion(text="q", answers=[_answer(score=5)])],
+        view_ids=[view_id], rubric_id="argument-v3",
+    )
+    first.completed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    save_session(first)
+    assert view_practice_stats()[view_id]["current_key_sessions"] == 1, "one session is not a baseline"
+    second = _completed_session(
+        "mv-view-2", [InterviewQuestion(text="q", answers=[_answer(score=7)])],
+        view_ids=[view_id], rubric_id="argument-v3",
+    )
+    second.completed_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    save_session(second)
+    stats = view_practice_stats()[view_id]
+    assert stats["current_key_sessions"] == 2, "two sessions under the key enable a delta"
+    assert stats["delta_vs_prev"] == 2.0
+    print("PASS: movement needs 10 v3 sessions app-wide and 2 under the View's key")
+
+
 def main() -> None:
     print("Validating interview practice persistence and evaluation...\n")
     _install_controller_stubs()
@@ -1246,6 +1293,7 @@ def main() -> None:
     test_p18_custom_and_unanchored_are_excluded()
     test_p19_retries_excluded_partials_included()
     test_p20_improving_uses_only_the_current_key()
+    test_pfix_movement_gates_global_and_per_view()
     print("\nAll validation scenarios passed.")
 
 

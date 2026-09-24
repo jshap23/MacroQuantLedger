@@ -32,7 +32,7 @@ from components.status_bar import days_since, staleness_color, staleness_label
 from storage.interview_store import (
     InterviewHistoryUnreadable, load_database, model_practice_stats, performance_summary,
     practice_pulse, preferred_model, recent_answers, save_preferred_model,
-    view_practice_queue, view_practice_stats, view_refresh_target,
+    trend_session_count, view_practice_queue, view_practice_stats, view_refresh_target,
 )
 from storage.interview_store import gone_quiet_tags as _not_flagged_tags
 from storage.model_library import (
@@ -849,6 +849,7 @@ def _session_count(count: int) -> str:
 
 
 _RUBRIC_MIN_REPS = 10
+_VIEW_BASELINE_REPS = 2
 
 
 def _trend_note(stats: dict) -> str:
@@ -865,7 +866,7 @@ def _trend_note(stats: dict) -> str:
         notes.append(
             f"{count} earlier session{'s' if count != 1 else ''} graded differently aren't compared."
         )
-    if stats.get("current_key_sessions", 0) < 2:
+    if stats.get("current_key_sessions", 0) < _VIEW_BASELINE_REPS:
         notes.append("New scoring — building a baseline.")
     return " ".join(notes)
 
@@ -921,6 +922,9 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
         return
     stats_by_view = view_practice_stats()
     queue = view_practice_queue(active)
+    # Movement is shown only when the app has enough comparable sessions overall;
+    # each View then contributes only once it has two sessions under its own key.
+    global_ready = trend_session_count() >= _RUBRIC_MIN_REPS
 
     def trend_html(entry: dict, show_movement: bool) -> str:
         if not show_movement:
@@ -963,9 +967,9 @@ def _render_views_quick_start(state: dict, refresh, app_state) -> None:
         days = entry["days"]
         target = entry.get("target") or view_refresh_target(view.priority)
         target_word = _TARGET_WORDS.get(target, f"{target}-day")
-        # Movement (delta and sparkline) shows only once this View has enough
-        # sessions under its current comparability key to be real.
-        show_movement = stats.get("current_key_sessions", 0) >= _RUBRIC_MIN_REPS
+        # A delta needs two sessions under this View's current key, and movement
+        # at all needs the app-wide comparable-session gate.
+        show_movement = global_ready and stats.get("current_key_sessions", 0) >= _VIEW_BASELINE_REPS
         note = "" if ghost else _trend_note(stats)
 
         row = ui.element("div").classes("vrow ghost" if ghost else "vrow")
