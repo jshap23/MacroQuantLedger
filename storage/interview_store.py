@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
+from typing import Callable
 
 from pydantic import ValidationError
 
@@ -91,6 +92,27 @@ def save_session(session: InterviewSession) -> None:
         else:
             database.sessions.insert(0, session)
         save_database(database)
+
+
+def update_session(
+    session_id: str, mutate: Callable[[InterviewSession], None],
+) -> InterviewSession | None:
+    """Apply ``mutate`` to the freshly stored session and save it.
+
+    Background work (the summary, a reference answer, a fact check) makes a slow
+    model call between loading a session and saving it. Saving that stale copy
+    would erase anything another writer stored in the meantime, so such work
+    must do its call first and then change only its own field through here.
+    Returns None when the session no longer exists.
+    """
+    with _LOCK:
+        database = load_database()
+        for session in database.sessions:
+            if session.id == session_id:
+                mutate(session)
+                save_database(database)
+                return session
+    return None
 
 
 def get_session(session_id: str) -> InterviewSession | None:

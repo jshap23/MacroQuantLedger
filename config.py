@@ -26,6 +26,18 @@ OPENCODE_GO_MODEL_DEFAULT = "deepseek-v4.1-flash"
 INTERVIEW_GRADER_MODEL_OPENROUTER_DEFAULT = "z-ai/glm-5.3"
 INTERVIEW_GRADER_MODEL_OPENCODE_GO_DEFAULT = "glm-5.3"
 
+# Practice "Check facts" is an advisory, click-gated web check of a Say it answer.
+# It always goes through OpenRouter's openrouter:web_search server tool, using the
+# stored OpenRouter key even when interview chat runs on OpenCode Go.
+# INTERVIEW_FACT_CHECK_MODEL overrides the model.
+FACT_CHECK_MODEL_DEFAULT = "z-ai/glm-5.3"
+FACT_CHECK_MAX_RESULTS = 5
+FACT_CHECK_MAX_SEARCHES = 4
+# Reasoning models spend this budget before emitting content, and the model may take
+# several tool turns, so it is larger than the other compact interview calls.
+FACT_CHECK_MAX_TOKENS = 1500
+FACT_CHECK_TIMEOUT_SECONDS = 90
+
 # Provider selection constants
 LLM_PROVIDER_OPENROUTER = "openrouter"
 LLM_PROVIDER_OPENCODE_GO = "opencode_go"

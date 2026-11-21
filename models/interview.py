@@ -73,6 +73,31 @@ class InterviewPostmortem(BaseModel):
     synthesis_error: str = ""
 
 
+class FactCheckClaim(BaseModel):
+    claim: str
+    # "answer" for something the candidate said, "card" for a dated fact on the stored View.
+    origin: str = "answer"
+    # "current", "outdated", "wrong" or "unverifiable". Plain str, not Literal, so an
+    # unexpected value in a saved file can never make the history unreadable.
+    status: str = "unverifiable"
+    latest_value: str = ""
+    reference_period: str = ""
+    released: str = ""
+    source_url: str = ""
+    source_title: str = ""
+    note: str = ""
+
+
+class FactCheck(BaseModel):
+    # "ok" when the model returned a usable list (possibly empty); "missing" on failure.
+    status: str = "missing"
+    # "", "provider", "output", or "no_citations" (an ok result with no cited sources).
+    error: str = ""
+    checked_at: datetime = Field(default_factory=_now)
+    model: str = ""
+    claims: list[FactCheckClaim] = Field(default_factory=list)
+
+
 class InterviewSession(BaseModel):
     id: str = Field(default_factory=_uuid)
     started_at: datetime = Field(default_factory=_now)
@@ -107,6 +132,9 @@ class InterviewSession(BaseModel):
     # Cached on demand from the postmortem "Show a strong version" button so a
     # re-render never re-bills the extra LLM call.
     reference_answer: str = ""
+    # Advisory web-grounded check of the answer's facts. Never scored; None until the
+    # user clicks Check facts.
+    fact_check: Optional[FactCheck] = None
 
 
 class InterviewDatabase(BaseModel):

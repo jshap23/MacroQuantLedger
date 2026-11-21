@@ -24,6 +24,7 @@ files = [
     'services/view_levels.py',
     'services/view_progress.py',
     'services/session_cleanup.py',
+    'services/fact_check.py',
     'components/status_bar.py',
     'components/macro_views.py',
     'components/asset_views.py',

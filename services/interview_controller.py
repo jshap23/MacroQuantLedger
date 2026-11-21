@@ -15,10 +15,11 @@ from services.interview_llm import (
 )
 from services.interview_prompts import (
     JOB_INTERVIEW_OPENERS, PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
+    view_currency_note,
 )
 from storage.interview_store import (
     effective_rubric_id, get_session, load_database, mark_review, save_session,
-    weakness_context,
+    update_session, weakness_context,
 )
 
 
@@ -212,6 +213,10 @@ def band_visible(session: InterviewSession) -> bool:
     return effective_rubric_id(session) not in {"unanchored", "custom"}
 
 
+def _today() -> str:
+    return datetime.now().astimezone().date().isoformat()
+
+
 def _system(
     session: InterviewSession, current_session_state: str, transcript_note: bool = False,
 ) -> str:
@@ -226,6 +231,7 @@ def _system(
         current_session_state=current_session_state,
         prompt_override=session.prompt_override,
         transcript_note=transcript_note,
+        view_note=view_currency_note(_today()) if session.view_context.strip() else "",
     )
 
 
@@ -859,7 +865,7 @@ def _synthesis_records(session: InterviewSession) -> list[dict]:
 def _synthesis_prompt(session: InterviewSession) -> dict:
     preset = get_preset(session.preset_key, session.mode)
     stats = session_stats(session)
-    return {
+    prompt = {
         "task": (
             "The interview is over. Write only the whole-interview review from "
             "the records below. Do not ask another question."
@@ -904,6 +910,9 @@ def _synthesis_prompt(session: InterviewSession) -> dict:
             "concepts_to_repeat": "up to 3 concrete next drills, each phrased as an action",
         },
     }
+    if session.view_context.strip():
+        prompt["setup"]["view_currency_note"] = view_currency_note(_today())
+    return prompt
 
 
 def _read_synthesis(raw: str) -> tuple[InterviewPostmortem, bool]:
@@ -970,11 +979,16 @@ def synthesize_session(
             postmortem.synthesis_error = ""
 
     # Never downgrade: a usable summary stays even if the retry comes back worse.
-    if _postmortem_rank(postmortem) >= _postmortem_rank(session.postmortem):
-        session.postmortem = postmortem
+    # This runs on the freshly stored session, not the copy loaded before the
+    # model call, so a field written meanwhile (reference answer, fact check)
+    # is not overwritten.
+    def apply(fresh: InterviewSession) -> None:
+        if _postmortem_rank(postmortem) >= _postmortem_rank(fresh.postmortem):
+            fresh.postmortem = postmortem
+
+    session = update_session(session_id, apply) or session
     if session.postmortem is not None and session.postmortem.status in ("ok", "partial"):
         _record_view_diagnostic(session)
-    save_session(session)
     return session
 
 
@@ -1085,6 +1099,8 @@ def reference_answer(
         "candidate_answer": answer_text[:4000],
         "target_rubric": RUBRICS[rubric_family_for(session)][1],
     }
+    if session.view_context.strip():
+        prompt["view_currency_note"] = view_currency_note(_today())
     llm = provider or default_provider()
     raw = llm.complete(
         [
@@ -1095,7 +1111,9 @@ def reference_answer(
                 "Speak it as if answering the question aloud in 150-200 words: bottom line "
                 "first, one causal chain explained end to end, evidence with magnitudes, and "
                 "what would change the conclusion. Do not invent facts that neither the "
-                "supplied context nor general knowledge supports. Then, under the heading "
+                "supplied context nor general knowledge supports. If the candidate "
+                "mentioned correct developments that the stored View lacks, you may use "
+                "them. Then, under the heading "
                 "'What the strong version does differently', list exactly two or three short "
                 "structural differences from the candidate's answer (not word-level edits). "
                 "Return plain text only."
@@ -1110,6 +1128,10 @@ def reference_answer(
     text = raw.strip()
     if not text:
         raise RuntimeError("The interview model did not return a reference answer.")
-    session.reference_answer = text
-    save_session(session)
-    return text
+
+    def apply(fresh: InterviewSession) -> None:
+        if not fresh.reference_answer:
+            fresh.reference_answer = text
+
+    updated = update_session(session_id, apply)
+    return updated.reference_answer if updated is not None else text

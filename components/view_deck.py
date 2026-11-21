@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import random
 from datetime import date, datetime, timezone
+from urllib.parse import urlsplit
 
 from nicegui import background_tasks, run, ui
 
@@ -20,7 +21,9 @@ from components.interview_speech import (
     stop_recording,
     transcribe_recording,
 )
+from models.interview import FactCheck
 from models.schema import AppState, TopicView, ViewFact
+from services.fact_check import fact_check_available, fact_check_session
 from services.interview_controller import (
     band_visible,
     evaluate_answer,
@@ -104,6 +107,16 @@ def inject_deck_css() -> None:
       .vd-order .q-btn.bg-primary{color:#1a1a1a!important;background:#f59e0b!important;border-color:#f59e0b}
       body.light-mode .vd-order .q-btn.bg-primary{color:#ffffff!important;background:#b45309!important;border-color:#b45309}
       .vd-keys{font:500 .62rem 'IBM Plex Mono',monospace;color:var(--text-faint);text-align:center;margin-top:.7rem}
+      .vd-claim{display:flex;gap:.6rem;align-items:flex-start;margin-top:.5rem}
+      .vd-chip{flex:none;min-width:5.4rem;text-align:center;font:700 .6rem 'IBM Plex Mono',monospace;padding:.15rem .4rem;border-radius:3px;border:1px solid var(--border-strong);color:var(--text-muted)}
+      .vd-chip-current{color:var(--accent);border-color:var(--accent)}
+      .vd-chip-outdated{color:#f59e0b;border-color:#f59e0b}
+      .vd-chip-wrong{color:#f87171;border-color:#f87171}
+      body.light-mode .vd-chip-outdated{color:#b45309;border-color:#b45309}
+      body.light-mode .vd-chip-wrong{color:#b91c1c;border-color:#b91c1c}
+      .vd-claim-text{font-size:.86rem;line-height:1.5;color:var(--text-primary)}
+      .vd-claim-meta{font-size:.78rem;line-height:1.45;color:var(--text-muted)}
+      .vd-claim-meta a{color:var(--accent)}
       .vd-summary-line{font:600 .85rem 'IBM Plex Mono',monospace;color:var(--text-primary);line-height:1.7;margin:.6rem 0 1rem}
     </style>""")
 
@@ -1026,11 +1039,94 @@ def _result(
         deck["panel"] = "say"
         redraw_panel()
 
+    async def check_facts() -> None:
+        check_btn.disable()
+        facts_box.clear()
+        with facts_box:
+            ui.label("Checking current sources…").classes("tv-meta").style("margin-top:.6rem")
+        try:
+            checked = await run.io_bound(lambda: fact_check_session(session.id))
+        except Exception:
+            _log.exception("Fact check failed for session %s", session.id)
+            checked = None
+        if facts_box.is_deleted:
+            return
+        check_btn.enable()
+        facts_box.clear()
+        with facts_box:
+            if checked is None or checked.fact_check is None:
+                _render_facts(FactCheck(status="missing", error="provider"), check_facts)
+            else:
+                _render_facts(checked.fact_check, check_facts)
+
     with ui.row().style("gap:.5rem;margin-top:.7rem"):
         ui.button("Say it again", icon="replay", on_click=again).classes("submit-btn")
+        if fact_check_available():
+            check_btn = ui.button(
+                "Check facts", icon="fact_check", on_click=check_facts
+            ).props("flat no-caps")
         ui.button(
             "Close", on_click=lambda: _close_and_redraw(deck, redraw_panel)
         ).classes("cancel-btn")
+    facts_box = ui.element("div").style("width:100%")
+
+
+_FACT_LABELS = {
+    "current": "CURRENT",
+    "outdated": "OUTDATED",
+    "wrong": "WRONG",
+    "unverifiable": "UNVERIFIED",
+}
+
+
+def _render_facts(check: FactCheck, retry) -> None:
+    """The advisory FACTS block under a Say it result. Never affects the score."""
+    ui.label("FACTS").classes("tv-meta").style("font-weight:700;margin-top:.7rem")
+    if check.status != "ok":
+        reason = (
+            "the model returned unusable output"
+            if check.error == "output"
+            else "the search could not be completed"
+        )
+        ui.label(f"Couldn't check facts: {reason}.").classes("vd-fb")
+        ui.button("Retry", icon="replay", on_click=retry).props("flat no-caps")
+        return
+    if check.error == "no_citations":
+        ui.label("No sources returned — try another model.").classes("vd-fb")
+        ui.button("Retry", icon="replay", on_click=retry).props("flat no-caps")
+    elif not check.claims:
+        ui.label("No checkable facts found in your answer.").classes("vd-fb")
+    for claim in check.claims:
+        with ui.element("div").classes("vd-claim"):
+            ui.label(_FACT_LABELS.get(claim.status, "UNVERIFIED")).classes(
+                f"vd-chip vd-chip-{claim.status}"
+            )
+            with ui.element("div"):
+                ui.label(claim.claim).classes("vd-claim-text")
+                if claim.origin == "card":
+                    ui.label("On your card").classes("vd-claim-meta")
+                if claim.latest_value:
+                    when = " · ".join(
+                        part
+                        for part in (
+                            claim.reference_period,
+                            f"released {claim.released}" if claim.released else "",
+                        )
+                        if part
+                    )
+                    ui.label(
+                        f"Latest: {claim.latest_value}" + (f" ({when})" if when else "")
+                    ).classes("vd-claim-meta")
+                if claim.note:
+                    ui.label(claim.note).classes("vd-claim-meta")
+                if claim.source_url:
+                    host = (urlsplit(claim.source_url).hostname or claim.source_url).removeprefix("www.")
+                    ui.link(claim.source_title or host, claim.source_url, new_tab=True).classes(
+                        "vd-claim-meta"
+                    )
+    ui.label("Advisory — doesn't affect your score.").classes("tv-meta").style(
+        "margin-top:.5rem"
+    )
 
 
 async def _close_and_redraw(deck: dict, redraw_panel) -> None:

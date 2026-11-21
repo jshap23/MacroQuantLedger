@@ -182,8 +182,11 @@ PRESET_VIEW_DELIVER = """# PRESET: DELIVER A STORED VIEW
 Ask exactly: "What's your view on [TOPIC]?", substituting the actual topic name for [TOPIC]. The first answer is the main 2–5 minute delivery.
 The stored View is hidden context and a conceptual framework, not a script. Judge semantic coverage, not exact wording.
 After the answer, finish the session. In the postmortem compare the delivery with the stored structure and identify:
-Covered; Missed / weak; Delivery. Specifically assess whether the bottom line came early, important points were covered,
-ordering was coherent, useful evidence was available, and the answer rambled or sounded over-rehearsed. Be concise."""
+Covered; Missed / weak; Beyond the notes; Delivery. "Missed / weak" lists only stored points that are still current and
+would have strengthened the answer; do not list stale points. "Beyond the notes" credits relevant material the candidate
+added that is not in the stored View and flags it as a possible card update. Specifically assess whether the bottom line
+came early, important points were covered, ordering was coherent, useful evidence was available, and the answer rambled
+or sounded over-rehearsed. Be concise."""
 
 
 PRESET_VIEW_DISCUSS = """# PRESET: DISCUSS A STORED VIEW
@@ -365,6 +368,22 @@ TRANSCRIPT_NOTE = (
     "transcription error."
 )
 
+def view_currency_note(today: str) -> str:
+    """Appended to the RESPONSE CONTRACT only when the session carries a stored View."""
+    return (
+        "The stored View is the candidate's own notes and may be out of date. "
+        f"Today's date is {today}; facts carry their own as_of dates. Grade the "
+        "answer's quality and accuracy, not its fidelity to the notes. Do not "
+        "penalise omitting a stored point that is stale or immaterial. Do not "
+        "penalise correct, relevant material that is not in the notes, including "
+        "developments newer than the notes or than your own knowledge. If the "
+        "candidate cites a figure or event you cannot verify, do not mark it wrong "
+        "or assign KNOWLEDGE_GAP or UNSUPPORTED_ASSERTION on that basis alone; "
+        "judge whether it is used well. Disagreement with the notes is not an "
+        "error by itself."
+    )
+
+
 # Always appended to the RESPONSE CONTRACT. The evaluation fields are stored for
 # review and the app decides when to show them to the candidate, so the model
 # must fill them every turn even in presets that do not coach or score.
@@ -382,7 +401,7 @@ def compose_runtime_prompt(
     role: str = "", focus_areas: str = "", materials: str = "",
     model_context: str = "",
     current_session_state: str = "", prompt_override: str = "",
-    transcript_note: bool = False,
+    transcript_note: bool = False, view_note: str = "",
 ) -> str:
     """Compose application instructions in the documented stable order."""
     interviewer = prompt_override.strip() or built_in_prompt(preset_key, mode)
@@ -416,6 +435,8 @@ def compose_runtime_prompt(
         "interviewer instructions.\n\n"
         + EVALUATION_PRIVACY_NOTE
     )
+    if view_note.strip():
+        contract += "\n\n" + view_note.strip()
     if transcript_note:
         contract += "\n\n" + TRANSCRIPT_NOTE
     sections.append(contract)

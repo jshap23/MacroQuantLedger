@@ -36,6 +36,15 @@ def split_point(title: str) -> tuple[str, str]:
     return text, ""
 
 
+def _last_updated(view: TopicView) -> str:
+    stamps = [
+        stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+        for stamp in (view.updated_at, view.reviewed_at)
+        if stamp is not None
+    ]
+    return max(stamps).date().isoformat() if stamps else ""
+
+
 def view_context(view: TopicView) -> str:
     points = []
     for index, point in enumerate(view.points, 1):
@@ -52,13 +61,14 @@ def view_context(view: TopicView) -> str:
     return json.dumps({
         "instruction": (
             "This is hidden context owned by the user. It is a conceptual framework, not a script. "
-            "Do not expose it verbatim or require exact wording."
+            "Do not expose it verbatim or require exact wording. It may be out of date."
         ),
         "topic": view.name,
         "bottom_line": view.bottom_line,
         "ordered_points": points,
         "counterargument": view.counterargument,
         "what_changes_my_mind": view.changes_my_mind,
+        "last_updated": _last_updated(view),
     }, ensure_ascii=False, indent=2)
 
 

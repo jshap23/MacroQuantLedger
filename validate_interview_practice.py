@@ -37,6 +37,7 @@ from services.interview_controller import (
     start_session,
     synthesize_session,
 )
+from services.fact_check import fact_check_session
 from services.interview_llm import (
     CompletionOptions, InterviewOutputError, InterviewProviderError,
     OpenAICompatibleProvider,
@@ -1084,6 +1085,457 @@ def test_p21_reference_answer_carries_context_and_caches() -> None:
     print("PASS: P21 reference answer carries question and materials, and re-renders without re-billing")
 
 
+def test_v1_currency_note_sits_in_the_response_contract() -> None:
+    from services.interview_prompts import (
+        BASE_INTERVIEWER_PROMPT, EVALUATION_PRIVACY_NOTE, TRANSCRIPT_NOTE,
+        compose_runtime_prompt, view_currency_note,
+    )
+    note = view_currency_note("2026-11-20")
+    assert "2026-11-20" in note and "may be out of date" in note
+    prompt = compose_runtime_prompt(
+        preset_key="view_deliver", mode="Discussion", view_note=note, transcript_note=True,
+    )
+    contract = prompt.index("# RESPONSE CONTRACT")
+    assert contract < prompt.index(EVALUATION_PRIVACY_NOTE) < prompt.index(note) \
+        < prompt.index(TRANSCRIPT_NOTE), \
+        "the note belongs in the response contract, after privacy and before the transcript note"
+    plain = compose_runtime_prompt(preset_key="view_deliver", mode="Discussion")
+    assert "may be out of date" not in plain, "no note unless a View is attached"
+    assert BASE_INTERVIEWER_PROMPT in prompt, "the base interviewer prompt must stay intact"
+    assert "out of date" not in BASE_INTERVIEWER_PROMPT
+    print("PASS: V1 the stale-card note sits in the response contract, only when supplied")
+
+
+def test_v2_session_prompts_carry_the_note_only_for_view_sessions() -> None:
+    real_today = controller._today
+    controller._today = lambda: "2026-11-20"
+    try:
+        view_session = _new_session(
+            mode="Discussion", preset_key="view_deliver", target_questions=1,
+            view_context='{"topic": "Term premium"}',
+        )
+        system = controller._system(view_session, "state")
+        assert "Today's date is 2026-11-20" in system
+        assert "may be out of date" in system
+
+        drill = _new_session()
+        assert "may be out of date" not in controller._system(drill, "state"), \
+            "a Quant Drill session has no stored View and must not get the note"
+
+        view_completed = _completed_session(
+            "v2-view", [InterviewQuestion(text="Q?", answers=[_answer()])],
+        )
+        view_completed.view_context = '{"topic": "Term premium"}'
+        setup = controller._synthesis_prompt(view_completed)["setup"]
+        assert "2026-11-20" in setup["view_currency_note"]
+
+        plain_completed = _completed_session(
+            "v2-plain", [InterviewQuestion(text="Q?", answers=[_answer()])],
+            preset_key="quant_drill", mode="Drill", style="", rubric_id="technical-v3",
+        )
+        assert "view_currency_note" not in controller._synthesis_prompt(plain_completed)["setup"]
+
+        _patch_history_file(_temp_history_file())
+        save_session(view_completed)
+        provider = FakeProvider(["A strong answer."])
+        reference_answer(view_completed.id, provider=provider)
+        prompt = json.loads(provider.calls[0]["messages"][1]["content"])
+        assert "2026-11-20" in prompt["view_currency_note"]
+        assert "correct developments" in provider.calls[0]["messages"][0]["content"]
+    finally:
+        controller._today = real_today
+    print("PASS: V2 the note reaches grading, synthesis, and reference answers for View sessions only")
+
+
+def test_v3_view_context_exposes_its_age() -> None:
+    from datetime import timedelta
+    from services.topic_views import view_context
+
+    updated = datetime(2026, 3, 2, 9, 0, tzinfo=timezone.utc)
+    view = TopicView(id="v3", name="Term premium", bottom_line="Up.", updated_at=updated)
+    data = json.loads(view_context(view))
+    assert list(data)[-1] == "last_updated", "last_updated must stay the final key"
+    assert data["last_updated"] == "2026-03-02"
+    assert "out of date" in data["instruction"]
+
+    view.reviewed_at = updated + timedelta(days=40)
+    assert json.loads(view_context(view))["last_updated"] == "2026-04-11", \
+        "Still holds counts as the latest confirmation"
+
+    view.reviewed_at = (updated + timedelta(days=40)).replace(tzinfo=None)
+    assert json.loads(view_context(view))["last_updated"] == "2026-04-11", \
+        "a naive reviewed_at must not break the comparison"
+    print("PASS: V3 view_context reports when the View was last edited or confirmed")
+
+
+def _fc_claim(**overrides) -> dict:
+    claim = {
+        "claim": "Core PCE was 2.9% in September.", "origin": "answer",
+        "status": "outdated", "latest_value": "2.7%", "reference_period": "Oct 2026",
+        "released": "2026-11-26", "source_url": "https://www.bea.gov/news/2026/pce",
+        "source_title": "BEA PCE", "note": "Revised down.",
+    }
+    claim.update(overrides)
+    return claim
+
+
+class FakeWeb:
+    """Stands in for fact_check._web_complete: (messages, model) -> (text, cited URLs)."""
+
+    def __init__(self, claims=None, cited=("https://bea.gov/news/2026/pce",), *, text=None,
+                 error=None, hook=None):
+        self.text = text if text is not None else _json({"claims": claims or []})
+        self.cited = set(cited)
+        self.error = error
+        self.hook = hook
+        self.calls: list[tuple] = []
+
+    def __call__(self, messages, model):
+        self.calls.append((messages, model))
+        if self.hook:
+            self.hook()
+        if self.error:
+            raise self.error
+        return self.text, set(self.cited)
+
+
+def _fc_session(session_id: str = "fc-session", *, text: str = "Core PCE was 2.9% in September.",
+                voice: bool = False, view_context: str = "") -> InterviewSession:
+    _patch_history_file(_temp_history_file())
+    answer = _answer(text=text)
+    answer.voice = voice
+    session = _completed_session(
+        session_id,
+        [InterviewQuestion(text="What's your view on Inflation?", answers=[answer])],
+        topic="Inflation",
+    )
+    session.view_context = view_context
+    save_session(session)
+    return session
+
+
+def test_f1_claims_are_citation_gated() -> None:
+    from services.fact_check import MAX_CLAIMS, validate_claims
+
+    cited = {"http://bea.gov/news/2026/pce/?utm_source=x"}
+    claims = validate_claims({"claims": [
+        _fc_claim(origin="card", claim="Card fact."),
+        _fc_claim(),
+        _fc_claim(claim="Unemployment is 4.1%.", status="current",
+                  source_url="https://bls.gov/news.release/empsit.htm", latest_value="4.1%"),
+        _fc_claim(claim="Payrolls rose 200k.", status="wrong", source_url=""),
+        _fc_claim(claim="GDP grew 2%.", status="Up-to-date"),
+        _fc_claim(claim="Maybe so.", status="maybe"),
+        _fc_claim(claim="   "),
+        "not a claim",
+    ]}, cited)
+    by_claim = {c.claim: c for c in claims}
+    assert "   " not in by_claim and len(claims) == 6, "blank and non-dict entries are skipped"
+
+    sourced = by_claim["Core PCE was 2.9% in September."]
+    assert sourced.status == "outdated" and sourced.latest_value == "2.7%", \
+        "a cited source survives scheme, www, query and trailing-slash differences"
+    assert sourced.source_url == "https://www.bea.gov/news/2026/pce"
+
+    uncited = by_claim["Unemployment is 4.1%."]
+    assert uncited.status == "unverifiable" and "No cited source" in uncited.note
+    assert uncited.source_url == "" and uncited.latest_value == "" and uncited.released == "", \
+        "an unsourced figure must not be shown"
+    assert by_claim["Payrolls rose 200k."].status == "unverifiable", "no URL means no verdict"
+    assert by_claim["GDP grew 2%."].status == "current", "status aliases are normalised"
+    assert by_claim["Maybe so."].status == "unverifiable"
+    assert claims[-1].origin == "card", "answer claims come before card facts"
+
+    many = validate_claims({"claims": [_fc_claim(claim=f"Claim {i}.") for i in range(9)]}, cited)
+    assert len(many) == MAX_CLAIMS == 6
+    for bad in ({}, {"claims": "none"}, [], None):
+        try:
+            validate_claims(bad, cited)
+        except ValueError:
+            continue
+        raise AssertionError("a response without a claims list must be an output failure")
+    print("PASS: F1 statuses need a cited source, aliases normalise, the list clamps to 6")
+
+
+def test_f2_result_is_cached_and_no_citations_is_retryable() -> None:
+    session = _fc_session()
+    web = FakeWeb([_fc_claim()])
+    result = fact_check_session(session.id, web_complete=web)
+    assert result.fact_check.status == "ok" and result.fact_check.error == ""
+    assert result.fact_check.claims[0].status == "outdated"
+    assert result.fact_check.model, "the model that ran is recorded"
+    again = fact_check_session(session.id, web_complete=FakeWeb([]))
+    assert len(web.calls) == 1 and again.fact_check.claims[0].claim == result.fact_check.claims[0].claim, \
+        "a cached usable result must not call the model again"
+
+    uncited = _fc_session("fc-uncited")
+    web = FakeWeb([_fc_claim(status="current")], cited=())
+    stored = fact_check_session(uncited.id, web_complete=web).fact_check
+    assert stored.status == "ok" and stored.error == "no_citations"
+    assert all(c.status == "unverifiable" for c in stored.claims)
+    retry = FakeWeb([_fc_claim()])
+    fact_check_session(uncited.id, web_complete=retry)
+    assert len(retry.calls) == 1, "a no-citations result is stored but can be retried"
+    assert load_database().sessions[0].fact_check.error == "", "the retry replaced it"
+    print("PASS: F2 usable results are cached; a no-citations result can be retried")
+
+
+def test_f3_failures_record_missing_and_never_raise() -> None:
+    session = _fc_session()
+    stored = fact_check_session(
+        session.id, web_complete=FakeWeb(error=InterviewProviderError("boom")),
+    ).fact_check
+    assert (stored.status, stored.error) == ("missing", "provider")
+    for web in (
+        FakeWeb(error=InterviewOutputError("empty")),
+        FakeWeb(text="plain prose, no json"),
+        FakeWeb(text=_json({"claims": "oops"})),
+    ):
+        stored = fact_check_session(session.id, web_complete=web).fact_check
+        assert (stored.status, stored.error) == ("missing", "output")
+    fixed = fact_check_session(session.id, web_complete=FakeWeb([_fc_claim()])).fact_check
+    assert fixed.status == "ok", "a failed check is retried on the next click"
+
+    active = _new_session(mode="Discussion", preset_key="view_deliver", target_questions=2)
+    for target in (active.id, "missing-session"):
+        try:
+            fact_check_session(target, web_complete=FakeWeb([]))
+        except RuntimeError:
+            continue
+        raise AssertionError("only a completed session can be fact-checked")
+    print("PASS: F3 provider and output failures record 'missing'; non-completed sessions raise")
+
+
+def test_f4_prompt_carries_card_facts_and_dictation_flag() -> None:
+    from models.schema import ViewFact, ViewPoint
+    from services.topic_views import view_context
+
+    view = TopicView(id="fc-view", name="Inflation", points=[ViewPoint(
+        title="Disinflation stalled",
+        facts=[ViewFact(text="Core PCE 2.9% y/y", as_of="2026-09-30", source="BEA"),
+               ViewFact(text="   ")],
+    )])
+    session = _fc_session("fc-card", voice=True, view_context=view_context(view))
+    web = FakeWeb([_fc_claim(origin="card", claim="Core PCE 2.9% y/y")])
+    fact_check_session(session.id, web_complete=web)
+    messages, model = web.calls[0]
+    prompt = json.loads(messages[1]["content"])
+    assert prompt["answer_was_dictated"] is True
+    assert prompt["candidate_answer"] == "Core PCE was 2.9% in September."
+    assert prompt["card_facts"] == [{
+        "point": "Disinflation stalled", "fact": "Core PCE 2.9% y/y",
+        "as_of": "2026-09-30", "source": "BEA",
+    }], "only real dated card facts are sent"
+    assert prompt["today"] and "misheard" in messages[0]["content"]
+
+    from services.fact_check import check_claims
+    nothing = FakeWeb([])
+    empty = check_claims(topic="x", answer_text="  ", card_facts=[], voice=False,
+                         model="m", today="2026-11-20", web_complete=nothing)
+    assert empty.status == "ok" and empty.claims == [] and not nothing.calls, \
+        "no answer and no card facts means nothing to check, so no paid call"
+    print("PASS: F4 card facts and the dictation flag reach the prompt; empty input makes no call")
+
+
+def test_f5_old_history_loads_without_fact_check() -> None:
+    history = _temp_history_file()
+    _patch_history_file(history)
+    history.write_text(json.dumps(_legacy_payload()), encoding="utf-8")
+    sessions = load_database().sessions
+    assert sessions and sessions[0].fact_check is None
+    print("PASS: F5 a saved session without fact_check loads unchanged")
+
+
+def test_f6_background_writes_do_not_erase_each_other() -> None:
+    from models.interview import FactCheck
+    from storage.interview_store import get_session, update_session
+
+    # The hazard itself: saving a stale copy erases a field written meanwhile.
+    session = _fc_session("fc-race-0")
+    stale = get_session(session.id)
+    update_session(session.id, lambda s: setattr(s, "reference_answer", "written meanwhile"))
+    save_session(stale)
+    assert get_session(session.id).reference_answer == "", "a stale save really does lose data"
+
+    # Summary call in flight while a reference answer and a fact check are stored.
+    session = _fc_session("fc-race-1")
+    session.postmortem = InterviewPostmortem(status="pending")
+    save_session(session)
+
+    class Racing(FakeProvider):
+        def complete(self, messages, options):
+            def write(fresh):
+                fresh.reference_answer = "A strong answer."
+                fresh.fact_check = FactCheck(status="ok", model="m")
+            update_session(session.id, write)
+            return super().complete(messages, options)
+
+    synthesize_session(session.id, provider=Racing([_postmortem_json()]))
+    stored = get_session(session.id)
+    assert stored.postmortem.status == "ok", "the summary is saved"
+    assert stored.reference_answer == "A strong answer." and stored.fact_check is not None, \
+        "the summary must not erase fields written while it was running"
+
+    # Reference answer call in flight while the summary and a fact check are stored.
+    session = _fc_session("fc-race-2")
+
+    class Racing2(FakeProvider):
+        def complete(self, messages, options):
+            def write(fresh):
+                fresh.postmortem = InterviewPostmortem(status="ok", overall_performance="Fine.")
+                fresh.fact_check = FactCheck(status="ok", model="m")
+            update_session(session.id, write)
+            return super().complete(messages, options)
+
+    text = reference_answer(session.id, provider=Racing2(["A strong answer."]))
+    stored = get_session(session.id)
+    assert text == "A strong answer." and stored.reference_answer == text
+    assert stored.postmortem.status == "ok" and stored.fact_check is not None, \
+        "a reference answer must not erase the summary or fact check"
+
+    # A fact check completing while a summary is stored keeps the summary.
+    session = _fc_session("fc-race-3")
+    update_session(session.id, lambda s: setattr(
+        s, "postmortem", InterviewPostmortem(status="ok", overall_performance="Fine.")))
+
+    def store_reference() -> None:
+        update_session(session.id, lambda s: setattr(s, "reference_answer", "kept"))
+
+    fact_check_session(session.id, web_complete=FakeWeb([_fc_claim()], hook=store_reference))
+    stored = get_session(session.id)
+    assert stored.fact_check.status == "ok" and stored.reference_answer == "kept" \
+        and stored.postmortem.status == "ok"
+    print("PASS: F6 summary, reference answer and fact check never erase each other")
+
+
+def test_f7_web_request_shape_retry_and_citations() -> None:
+    import copy
+    import types
+
+    import config as app_config
+    import openai
+    from services import fact_check as fc
+
+    class StatusError(Exception):
+        def __init__(self, status: int):
+            super().__init__(f"status {status}")
+            self.status_code = status
+
+    def resp(content, annotations=None, extra=None, with_attr=True):
+        fields = {"content": content}
+        if with_attr:
+            fields["annotations"] = annotations
+        if extra is not None:
+            fields["model_extra"] = extra
+        message = types.SimpleNamespace(**fields)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    def install(script):
+        calls = []
+
+        class Completions:
+            def create(self, **kwargs):
+                calls.append(copy.deepcopy(kwargs))
+                item = script.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        class Chat:
+            completions = Completions()
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.chat = Chat()
+
+        openai.OpenAI = Client
+        return calls
+
+    real_client, real_key = openai.OpenAI, fc.user_settings.llm_api_key
+    fc.user_settings.llm_api_key = lambda provider="": "test-key"
+    messages = [{"role": "user", "content": "x"}]
+    try:
+        dict_form = {"type": "url_citation", "url_citation": {"url": "https://a.gov/x"}}
+        object_form = types.SimpleNamespace(
+            type="url_citation", url_citation=types.SimpleNamespace(url="https://b.gov/y"),
+        )
+        calls = install([resp("{}", [dict_form, object_form, {"type": "other"}])])
+        text, cited = fc._web_complete(messages, "some/model")
+        assert text == "{}" and cited == {"https://a.gov/x", "https://b.gov/y"}, \
+            "citations are read from dict and object annotations, ignoring other types"
+        request = calls[0]
+        assert request["model"] == "some/model"
+        assert request["max_tokens"] == app_config.FACT_CHECK_MAX_TOKENS
+        assert "temperature" not in request and "response_format" not in request, \
+            "search models may reject temperature, and JSON mode can break tool turns"
+        body = request["extra_body"]
+        assert body["reasoning"] == {"effort": "minimal"}, \
+            "reasoning is minimised, not disabled: GLM 5.3 refuses to disable it"
+        assert body["tools"] == [{
+            "type": "openrouter:web_search",
+            "parameters": {
+                "max_results": app_config.FACT_CHECK_MAX_RESULTS,
+                "max_uses": app_config.FACT_CHECK_MAX_SEARCHES,
+            },
+        }]
+
+        install([resp("{}", with_attr=False, extra={"annotations": [dict_form]})])
+        assert fc._web_complete(messages, "m")[1] == {"https://a.gov/x"}, \
+            "annotations the SDK leaves in model_extra are still read"
+
+        calls = install([StatusError(400), resp("ok")])
+        assert fc._web_complete(messages, "m")[0] == "ok"
+        assert len(calls) == 2 and "reasoning" not in calls[1]["extra_body"], \
+            "a 400 is retried once without the reasoning hint"
+        assert calls[1]["extra_body"]["tools"], "the retry keeps the search tool"
+
+        calls = install([StatusError(401), resp("never")])
+        try:
+            fc._web_complete(messages, "m")
+        except InterviewProviderError:
+            pass
+        else:
+            raise AssertionError("an auth failure must surface as a provider error")
+        assert len(calls) == 1, "an auth failure is never sent twice"
+
+        calls = install([StatusError(400), StatusError(400)])
+        try:
+            fc._web_complete(messages, "m")
+        except InterviewProviderError:
+            pass
+        else:
+            raise AssertionError("two 400s must surface as a provider error")
+        assert len(calls) == 2
+
+        install([resp("   ")])
+        try:
+            fc._web_complete(messages, "m")
+        except InterviewOutputError:
+            pass
+        else:
+            raise AssertionError("empty content is an output failure")
+        install([types.SimpleNamespace(choices=[])])
+        try:
+            fc._web_complete(messages, "m")
+        except InterviewProviderError:
+            pass
+        else:
+            raise AssertionError("no choices is a provider failure")
+
+        calls = install([resp("never")])
+        fc.user_settings.llm_api_key = lambda provider="": ""
+        try:
+            fc._web_complete(messages, "m")
+        except InterviewProviderError:
+            pass
+        else:
+            raise AssertionError("no OpenRouter key must fail before any request")
+        assert calls == []
+    finally:
+        openai.OpenAI, fc.user_settings.llm_api_key = real_client, real_key
+    print("PASS: F7 the web call uses minimal reasoning and the search tool, retries only a 400, reads citations")
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 batch C (Task 4): trends compare like with like.
 # ---------------------------------------------------------------------------
@@ -1322,6 +1774,16 @@ def main() -> None:
     test_pfix_empty_content_uses_repair_and_records_output()
     test_pfix_older_session_retry_keeps_latest_diagnostic()
     test_p21_reference_answer_carries_context_and_caches()
+    test_v1_currency_note_sits_in_the_response_contract()
+    test_v2_session_prompts_carry_the_note_only_for_view_sessions()
+    test_v3_view_context_exposes_its_age()
+    test_f1_claims_are_citation_gated()
+    test_f2_result_is_cached_and_no_citations_is_retryable()
+    test_f3_failures_record_missing_and_never_raise()
+    test_f4_prompt_carries_card_facts_and_dictation_flag()
+    test_f5_old_history_loads_without_fact_check()
+    test_f6_background_writes_do_not_erase_each_other()
+    test_f7_web_request_shape_retry_and_citations()
     test_p15_view_stats_use_current_key_only()
     test_p16_model_change_starts_a_new_series()
     test_p17_preset_change_starts_a_new_series()
