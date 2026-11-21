@@ -30,6 +30,7 @@ from services.interview_controller import (
     _evaluation_schema,
     band_visible,
     evaluate_answer,
+    reference_answer,
     rubric_bands,
     session_band,
     session_stats,
@@ -1050,6 +1051,39 @@ def test_pfix_older_session_retry_keeps_latest_diagnostic() -> None:
     print("PASS: retrying an older session keeps the View's latest diagnostic")
 
 
+def test_p21_reference_answer_carries_context_and_caches() -> None:
+    _patch_history_file(_temp_history_file())
+    session = _completed_session(
+        "p21-session",
+        [InterviewQuestion(
+            text="Walk me through your rates trade.",
+            answers=[_answer(text="My delivery.")],
+        )],
+        preset_key="job_interview", mode="Simulation", style="",
+        rubric_id="interview-v3", topic="Rates interview",
+    )
+    session.materials = "ROLE: rates PM. RESUME: ..."
+    save_session(session)
+
+    provider = FakeProvider([
+        "A strong answer.\n\nWhat the strong version does differently\n- Bottom line first.",
+    ])
+    text = reference_answer(session.id, provider=provider)
+    assert len(provider.calls) == 1
+    prompt = json.loads(provider.calls[0]["messages"][1]["content"])
+    assert prompt["question"] == "Walk me through your rates trade.", \
+        "the reference call must be grounded in the actual question"
+    assert prompt["materials"] == "ROLE: rates PM. RESUME: ...", \
+        "Job Interview materials must reach the reference call"
+    assert prompt["candidate_answer"] == "My delivery."
+    assert prompt["target_rubric"] == RUBRICS["interview"][1], \
+        "a Job Interview session references its own rubric family"
+
+    cached = reference_answer(session.id, provider=FakeProvider([]))
+    assert cached == text, "a cached reference answer must never re-bill the extra call"
+    print("PASS: P21 reference answer carries question and materials, and re-renders without re-billing")
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 batch C (Task 4): trends compare like with like.
 # ---------------------------------------------------------------------------
@@ -1287,6 +1321,7 @@ def main() -> None:
     test_p14_phase1_missing_summary_is_upgraded()
     test_pfix_empty_content_uses_repair_and_records_output()
     test_pfix_older_session_retry_keeps_latest_diagnostic()
+    test_p21_reference_answer_carries_context_and_caches()
     test_p15_view_stats_use_current_key_only()
     test_p16_model_change_starts_a_new_series()
     test_p17_preset_change_starts_a_new_series()

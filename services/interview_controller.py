@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from services.interview_llm import (
     InterviewProviderError, default_provider, interview_model, parse_json_response,
 )
 from services.interview_prompts import (
-    PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
+    JOB_INTERVIEW_OPENERS, PROMPT_PACK_VERSION, compose_runtime_prompt, get_preset,
 )
 from storage.interview_store import (
     effective_rubric_id, get_session, load_database, mark_review, save_session,
@@ -258,7 +259,7 @@ def _opening_question(session: InterviewSession) -> str:
     if session.preset_key == "quant_drill":
         return f"What is the core intuition behind {topic}?"
     if session.preset_key == "job_interview":
-        return f"What makes you a strong fit for {session.role or topic}?"
+        return random.choice(JOB_INTERVIEW_OPENERS)
     if session.preset_key == "research_defense":
         return f"What is your main conclusion on {topic}, and what is the strongest evidence for it?"
     if session.preset_key == "model_explain":
@@ -596,6 +597,16 @@ def evaluate_answer(
         },
         "output_schema": _evaluation_schema(final_turn, rubric_family),
     }
+    if session.preset_key == "job_interview":
+        from storage.interview_store import recent_questions
+        prior = recent_questions("job_interview")
+        if prior:
+            prompt["recent_prior_questions"] = prior
+            prompt["recent_prior_questions_note"] = (
+                "Do not repeat or trivially rephrase the questions listed in "
+                "recent_prior_questions; they were asked in recent prior sessions. "
+                "Probing the same underlying claim more deeply is fine."
+            )
     llm = provider or default_provider()
     base_tokens = EVAL_MAX_TOKENS
 
@@ -799,11 +810,25 @@ def session_stats(session: InterviewSession) -> dict:
 # The whole-interview review is a separate call after completion. The model is
 # given the preset's own end-of-session instructions, the app-computed numbers
 # as facts, and one record per answer.
+#
+# The review is a coach's debrief, not a gatekeeper's verdict: honest about
+# every gap, but every weakness is paired with what a stronger answer would
+# have said and the distance to the bar. This is a tone-only contract - the
+# rubric, bands, and score scale are unchanged, so PROMPT_PACK_VERSION is
+# deliberately not bumped (a bump would split future sessions into a new
+# comparability key and orphan existing trend history).
 _SYNTHESIS_SYSTEM = (
     "You write the whole-interview review now that the practice session has "
     "ended. You are given the setup, app-computed numbers you must treat as "
     "facts, and one record per answer. Follow the supplied end-of-session "
     "instructions. Cite question numbers. Never invent an answer or a score. "
+    "You write as a coach debriefing a candidate who will practice again "
+    "tomorrow, not as a gatekeeper issuing a verdict. Be honest: never inflate "
+    "a strength and never soften a real gap. Every weakness must be paired "
+    "with what a stronger answer would have said and one concrete drill that "
+    "closes the gap. Express gaps as specific, fixable behaviors, never as "
+    "global judgments about the candidate. Never state a pass/fail verdict; "
+    "report the distance to the bar and the behaviors that close it. "
     "Return JSON only, with no preamble."
 )
 
@@ -863,13 +888,20 @@ def _synthesis_prompt(session: InterviewSession) -> dict:
         "end_of_session_instructions": preset.prompt,
         "answers": _synthesis_records(session),
         "output_schema": {
-            "overall_performance": "2-4 sentences",
+            "overall_performance": (
+                "2-4 sentences: open with what genuinely worked, name the "
+                "highest-value gap as a fixable behavior, close with the single "
+                "highest-value next step; never a pass/fail verdict"
+            ),
             "strongest_areas": "up to 3, each citing question numbers such as 'Q2, Q5: ...'",
             "biggest_problems": (
-                "up to 3, each citing question numbers and starting with one "
-                "category: knowledge, evidence, reasoning, communication or pressure"
+                "up to 3, each citing question numbers, starting with one "
+                "category: knowledge, evidence, reasoning, communication or "
+                "pressure, then what a stronger answer would have included and "
+                "one concrete drill that fixes it; keep each entry to 2-3 "
+                "sentences"
             ),
-            "concepts_to_repeat": "up to 3 concrete next drills",
+            "concepts_to_repeat": "up to 3 concrete next drills, each phrased as an action",
         },
     }
 
@@ -1037,15 +1069,19 @@ def reference_answer(
     if session.reference_answer:
         return session.reference_answer
     answer_text = ""
+    question_text = ""
     for question in session.questions:
         if question.answers:
             answer_text = question.answers[0].text
+            question_text = question.text
             break
     if not answer_text:
         raise RuntimeError("This session has no answer to reference.")
     prompt = {
         "topic": session.topic,
+        "question": question_text,
         "stored_view": session.view_context[:6000],
+        "materials": session.materials[:4000],
         "candidate_answer": answer_text[:4000],
         "target_rubric": RUBRICS[rubric_family_for(session)][1],
     }
@@ -1054,13 +1090,14 @@ def reference_answer(
         [
             {"role": "system", "content": (
                 "You are a demanding interview coach. Write one reference answer that would "
-                "score 7-8 on the rubric supplied in target_rubric for the given topic, using "
-                "the stored View as background. Speak it as if answering the question aloud in "
-                "150-200 words: bottom line first, one causal chain explained end to end, "
-                "evidence with magnitudes, and what would falsify the view. Do not invent facts "
-                "that neither the stored View nor general knowledge supports. Then, under the "
-                "heading 'What the strong version does differently', list exactly two or three "
-                "short structural differences from the candidate's answer (not word-level edits). "
+                "score 7-8 on the rubric supplied in target_rubric, answering the supplied "
+                "question and using the stored View or interview materials as background. "
+                "Speak it as if answering the question aloud in 150-200 words: bottom line "
+                "first, one causal chain explained end to end, evidence with magnitudes, and "
+                "what would change the conclusion. Do not invent facts that neither the "
+                "supplied context nor general knowledge supports. Then, under the heading "
+                "'What the strong version does differently', list exactly two or three short "
+                "structural differences from the candidate's answer (not word-level edits). "
                 "Return plain text only."
             )},
             {"role": "user", "content": json.dumps(prompt)},

@@ -144,7 +144,7 @@ Possible lines of attack include: Why did you do this? How did you measure it? W
 
 Include realistic topic changes and occasional unexpected questions.
 
-At the end, provide a postmortem covering: (1) overall likelihood that this performance would pass the interview; (2) three strongest areas; (3) three biggest risks; (4) questions that exposed genuine knowledge gaps; (5) questions where knowledge was present but communication failed; and (6) the highest-priority things to practice before the actual interview. Be candid and specific."""
+At the end, provide a coach's postmortem covering: (1) how close this performance is to the bar and the specific behaviors that separate it from a pass; (2) three strongest areas; (3) three biggest risks, each paired with its fix; (4) questions that exposed genuine knowledge gaps; (5) questions where knowledge was present but communication failed; and (6) the highest-priority things to practice before the actual interview. Be candid and specific: honest about every gap, but a debrief the candidate can act on, not a rejection letter."""
 
 
 PRESET_RESEARCH_DEFENSE = """# PRESET: RESEARCH DEFENSE
@@ -307,6 +307,15 @@ QUANT_FUNDAMENTALS_OPENERS: tuple[str, ...] = (
     "What does stationarity mean for a time series, and why do many models require it?",
     "How does gradient boosting build an ensemble, and what role does the learning rate play?",
     "Why is a convex loss preferred in optimization, and what can go wrong without convexity?",
+)
+
+JOB_INTERVIEW_OPENERS: tuple[str, ...] = (
+    "What makes you a strong fit for this role?",
+    "Walk me through the piece of work you're proudest of.",
+    "Tell me about yourself.",
+    "What are you looking for in your next role?",
+    "Why this firm and this seat?",
+    "What would you want to accomplish in your first year here?",
 )
 
 

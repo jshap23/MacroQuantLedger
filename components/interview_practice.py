@@ -2301,6 +2301,7 @@ def _render_postmortem_inner(session, state: dict, refresh) -> None:
                 ui.button("Practice Defense", on_click=lambda: (state.update(session=None, pending=None, retrying=False, view_setup={"ids": session.view_ids, "style": "Defend"}), refresh())).classes("cancel-btn")
             if state.get("review_view") and len(session.view_ids) == 1:
                 ui.button("Review This View", icon="edit_note", on_click=lambda: state["review_view"](session.view_ids[0])).classes("cancel-btn")
+        if session.view_ids or preset.key == "job_interview":
             ref_btn = ui.button(
                 "Hide strong version" if ref_open else "Show a strong version",
                 icon="auto_awesome", on_click=toggle_reference,

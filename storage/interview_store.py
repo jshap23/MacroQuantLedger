@@ -368,6 +368,23 @@ def recent_answers(
     return [row for _, row in rows[:max(0, limit)]]
 
 
+def recent_questions(preset_key: str, limit: int = 15) -> list[str]:
+    """Question texts from recent completed sessions for this preset,
+    newest-first, whitespace-normalized and deduplicated."""
+    questions: list[str] = []
+    seen: set[str] = set()
+    for session in load_database().sessions:
+        if session.status != "completed" or session.preset_key != preset_key:
+            continue
+        for question in session.questions:
+            text = " ".join(question.text.split())
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            questions.append(text)
+    return questions[:max(0, limit)]
+
+
 def gone_quiet_tags(
     reps: list[dict], minimum: int = 2, max_streak: int = 10, limit: int = 2,
 ) -> list[tuple[str, int]]:
