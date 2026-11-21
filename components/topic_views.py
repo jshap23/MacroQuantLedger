@@ -7,7 +7,13 @@ from nicegui import run, ui
 
 from models.schema import AppState, TopicView, ViewFact, ViewPoint
 from components.briefing_strip import render_briefing_strip
+from components.view_deck import (
+    confirm_view, confirmed_label, current_levels, freshness_color, inject_deck_css,
+    current_streak, level_pips, open_deck_picker, recall_suffix, render_deck, start_deck,
+)
 from services.topic_views import touch
+from components.undo_toast import inject_undo_css, show_undo
+from services.view_progress import deck_for_link, note_activity
 from storage.persistence import save_state
 from storage.topic_view_sync import apply_sync_plan, plan_sync, sync_is_enabled
 from storage.user_settings import obsidian_views_folder
@@ -106,15 +112,18 @@ def _drop_draft(local: dict) -> None:
     local["draft"] = None
 
 
-def render_topic_views(state: AppState, save_indicator, practice_view, open_bridge=None) -> None:
+def render_topic_views(state: AppState, save_indicator, practice_view, open_bridge=None, initial_deck: str = "") -> None:
     _inject_css()
+    inject_deck_css()
+    inject_undo_css()
     local = {"selected": None, "show_archived": False, "tag_filter": set(), "sort": "manual",
-             "draft_id": None, "draft": None}
+             "draft_id": None, "draft": None, "deck": None}
     root = ui.element("div").classes("tv-shell")
 
     def persist(view: TopicView | None = None) -> None:
         if view:
             touch(view)
+            note_activity(state)
         save_state(state)
         save_indicator()
 
@@ -124,11 +133,20 @@ def render_topic_views(state: AppState, save_indicator, practice_view, open_brid
             view = next((item for item in state.topic_views if item.id == local["selected"]), None)
             if view:
                 _detail(view, state, local, persist, refresh, practice_view)
+            elif local.get("deck"):
+                render_deck(state, local, persist, refresh)
             else:
                 _overview(state, local, persist, refresh, save_indicator)
 
     if open_bridge is not None:
-        open_bridge["open"] = lambda view_id: (local.update(selected=view_id), refresh())
+        open_bridge["open"] = lambda view_id: (local.update(selected=view_id, deck=None), refresh())
+
+    if initial_deck:
+        picked, order = deck_for_link([v for v in state.topic_views if not v.archived], initial_deck)
+        if picked:
+            start_deck(local, picked, order)
+        else:
+            ui.notify(f"No Views matched '?deck={initial_deck}', so the overview is shown.", type="info")
 
     refresh()
 
@@ -328,6 +346,7 @@ def _toggle_tag_filter(local: dict, tag: str, refresh) -> None:
 
 
 def _overview(state: AppState, local: dict, persist, refresh, save_indicator) -> None:
+    deck_source: list[TopicView] = []
     # Top of Mind lives at the top of My Views; it saves through the app-level
     # save_indicator so the save status and staleness label behave as on Today.
     render_briefing_strip(state, save_indicator, compact=True)
@@ -336,7 +355,10 @@ def _overview(state: AppState, local: dict, persist, refresh, save_indicator) ->
         with ui.column().style("gap:.15rem"):
             ui.label("MY VIEWS").classes("section-header")
             ui.label("A finite set of arguments you can retrieve and defend.").style("font-size:1.05rem;font-weight:700")
-        ui.button("New Topic", icon="add", on_click=lambda: _new_dialog(state, local, persist, refresh)).classes("submit-btn")
+        with ui.row().style("gap:.5rem;align-items:center"):
+            ui.button("Flip through", icon="style", on_click=lambda: open_deck_picker(local, deck_source, refresh)).props("flat no-caps").tooltip(
+                "Step through your Views one at a time: confirm, quick-edit, or say one out loud")
+            ui.button("New Topic", icon="add", on_click=lambda: _new_dialog(state, local, persist, refresh)).classes("submit-btn")
 
     _sync_bar(state, local, persist, refresh)
     _tag_filter_bar(state, local, refresh)
@@ -356,6 +378,7 @@ def _overview(state: AppState, local: dict, persist, refresh, save_indicator) ->
     if sort_mode != "manual":
         active = _sort_views(active, sort_mode)
 
+    deck_source[:] = active
     if not active:
         with ui.element("div").classes("tv-empty").style("margin-top:1rem"):
             if selected_tags:
@@ -366,6 +389,13 @@ def _overview(state: AppState, local: dict, persist, refresh, save_indicator) ->
                 ui.label("No fabricated content—your thinking stays yours.").classes("tv-meta").style("margin:.35rem 0 .8rem")
                 ui.button("New Topic", icon="add", on_click=lambda: _new_dialog(state, local, persist, refresh)).classes("submit-btn")
         return
+    rehearsed = sum(1 for lv in current_levels(active).values() if lv.level >= 3)
+    streak = current_streak(state)
+    progress = f"{rehearsed} of {len(active)} Views rehearsed or better"
+    if streak >= 2:
+        progress += f" · {streak}-week streak"
+    ui.label(progress).classes("tv-meta").style("margin-top:.9rem").tooltip(
+        "The streak counts consecutive weeks with at least one rep, confirmation, or edit")
     if needs:
         ui.label("NEEDS ATTENTION").classes("section-header").style("margin:1.25rem 0 .55rem")
         ui.label("Core Views you have chosen to keep front and center.").classes("tv-meta").style("margin-bottom:.55rem")
@@ -380,22 +410,43 @@ def _overview(state: AppState, local: dict, persist, refresh, save_indicator) ->
             _cards(archived, state, local, persist, refresh)
 
 
+def _confirm_card(view: TopicView, state: AppState, persist, refresh) -> None:
+    previous = view.reviewed_at
+    note_activity(state)
+    confirm_view(view, persist)
+
+    def undo() -> None:
+        view.reviewed_at = previous
+        persist()
+        refresh()
+
+    # Offer the undo before refreshing: the refresh deletes the clicked button.
+    show_undo(f"'{view.name}' confirmed", undo)
+    refresh()
+
+
 def _cards(views, state, local, persist, refresh) -> None:
     manual_order = local.get("sort", "manual") == "manual"
+    levels = current_levels(views)
     with ui.element("div").classes("tv-grid"):
         for view in views:
-            with ui.element("div").classes("tv-card") as card:
+            with ui.element("div").classes("tv-card").style(f"border-left:3px solid {freshness_color(view)}") as card:
                 with ui.row().style("width:100%;justify-content:space-between;align-items:center;gap:.5rem"):
                     ui.label(view.name).classes("tv-name")
                     ui.label(view.priority).classes("tv-pill")
                 ui.label(view.bottom_line or "Bottom line not developed yet.").classes("tv-bottom")
                 ui.label(f"{len(view.points)} points · Practiced {_when(view.practice.last_practiced)} · {view.status}").classes("tv-meta")
+                with ui.row().style("width:100%;justify-content:space-between;align-items:center;margin-top:.3rem"):
+                    level_pips(levels[view.id])
+                    ui.label(confirmed_label(view) + recall_suffix(view)).classes("tv-meta")
                 visible_tags = [tag for tag in view.tags if tag != "view"]
                 if visible_tags:
                     with ui.row().style("gap:.25rem;flex-wrap:wrap;margin-top:.35rem"):
                         for tag in visible_tags:
                             ui.label(tag).classes("tv-card-tag")
                 with ui.row().classes("tv-actions").style("gap:.2rem;margin-top:.5rem;justify-content:flex-end"):
+                    if not view.archived:
+                        ui.button(icon="check", on_click=lambda _, v=view: _confirm_card(v, state, persist, refresh)).props("flat dense round").tooltip("Still holds: confirm as current without editing")
                     ui.button("Open", on_click=lambda _, v=view: (local.update(selected=v.id), refresh())).props("flat dense no-caps")
                     if manual_order:
                         ui.button(icon="keyboard_arrow_up", on_click=lambda _, v=view: (_move_topic(state, v, -1), persist(), refresh())).props("flat dense round").tooltip("Move topic up")
@@ -552,6 +603,7 @@ def _detail(view, state, local, persist, refresh, practice_view) -> None:
         view.changes_my_mind = draft.changes_my_mind.strip()
         view.points = draft.points
         touch(view)
+        note_activity(state)
         persist()
         _drop_draft(local)
         ui.notify("View updated.", type="positive")

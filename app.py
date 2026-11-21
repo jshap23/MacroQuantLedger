@@ -39,6 +39,8 @@ from services import llm_polish
 from services.interview_llm import available as interview_llm_available
 from services.interview_speech import register_interview_speech_routes
 from services.interview_tts import register_interview_tts_routes
+from services.session_cleanup import STALE_DAYS, abandon_stale_sessions, stale_active_sessions
+from storage.interview_store import InterviewHistoryUnreadable, load_database
 
 register_interview_speech_routes(ni_app)
 register_interview_tts_routes(ni_app)
@@ -599,7 +601,7 @@ def startup():
 
 
 @ui.page("/")
-def index():
+def index(deck: str = ""):
     dark = ui.dark_mode()
     dark.enable()
     ui.add_head_html('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
@@ -951,9 +953,42 @@ def index():
                         )
                 dialog.open()
 
+            def do_cleanup_sessions():
+                try:
+                    stale = stale_active_sessions(load_database().sessions)
+                except InterviewHistoryUnreadable:
+                    ui.notify("Practice history could not be read, so nothing was changed.", type="negative")
+                    return
+                if not stale:
+                    ui.notify(f"No unfinished practice sessions older than {STALE_DAYS} days.", type="info")
+                    return
+                with ui.dialog() as dialog, ui.card().style(
+                    "background:var(--bg-card); color:var(--text-primary); "
+                    "font-family:'IBM Plex Mono',monospace; min-width:min(380px,90vw); padding:1.5rem;"
+                ):
+                    ui.label("Clean up unfinished sessions").style(
+                        "font-size:1rem; font-weight:700; color:var(--accent); margin-bottom:0.5rem;"
+                    )
+                    ui.label(
+                        f"{len(stale)} unfinished practice session{'s' if len(stale) != 1 else ''} started more than "
+                        f"{STALE_DAYS} days ago will be marked abandoned. Their answers are kept; they will not "
+                        "count as completed or change any View's practice history."
+                    ).style("color:var(--text-muted); font-size:0.8rem; margin-bottom:1.25rem; line-height:1.6;")
+                    with ui.row().style("gap:0.5rem; justify-content:flex-end;"):
+                        ui.button("Cancel", on_click=dialog.close).classes("cancel-btn")
+
+                        def confirm_cleanup():
+                            abandon_stale_sessions()
+                            dialog.close()
+                            ui.navigate.reload()
+
+                        ui.button("Mark abandoned", on_click=confirm_cleanup).classes("submit-btn")
+                dialog.open()
+
             with ui.button("···").classes("menu-btn"):
                 with ui.menu().classes("overflow-menu"):
                     ui.menu_item("Settings", on_click=open_settings)
+                    ui.menu_item("Clean up unfinished sessions…", on_click=do_cleanup_sessions)
                     ui.separator()
                     ui.menu_item("Export Excel", on_click=do_export_excel)
                     ui.menu_item("Export Macro JSON",  on_click=do_export_json)
@@ -1036,7 +1071,7 @@ def index():
             })
             with ui.tab_panels(views_tabs, value=view_topics).classes("secondary-panels w-full"):
                 with ui.tab_panel(view_topics):
-                    render_topic_views(s, save_indicator, practice_views, views_bridge)
+                    render_topic_views(s, save_indicator, practice_views, views_bridge, initial_deck=deck)
                 with ui.tab_panel(view_macro):
                     render_macro_views(s, save_indicator)
                 with ui.tab_panel(view_assets):

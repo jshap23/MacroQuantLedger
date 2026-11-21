@@ -6,6 +6,7 @@ from nicegui import ui
 from models.schema import AppState, AssetView
 from storage.persistence import save_state
 from components.status_bar import days_since, staleness_color
+from components.undo_toast import inject_undo_css, show_undo
 
 _SNAPSHOTS_DIR = Path(__file__).resolve().parent.parent / "data" / "snapshots"
 
@@ -46,6 +47,7 @@ def _inject_css():
 
 def render_asset_views(state: AppState, save_indicator):
     _inject_css()
+    inject_undo_css()
     def save():
         save_state(state)
         save_indicator()
@@ -191,6 +193,7 @@ def _l1_row(av: AssetView, save):
             )
             _score_control(av, save, stale_lbl, compact=False)
             stale_lbl[0] = _staleness_label(av)
+            _confirm_button(av, save, stale_lbl, compact=False)
         # Line 2: note/thesis (clickable, 2-line clamp)
         _note_preview_label(
             av,
@@ -211,6 +214,7 @@ def _l2_row(av: AssetView, save):
             )
             _score_control(av, save, stale_lbl, compact=True)
             stale_lbl[0] = _staleness_label(av, compact=True)
+            _confirm_button(av, save, stale_lbl, compact=True)
         # Line 2: note/thesis (clickable, 2-line clamp)
         _note_preview_label(
             av,
@@ -220,6 +224,28 @@ def _l2_row(av: AssetView, save):
             stale_lbl=stale_lbl,
         )
 
+
+
+def _confirm_button(av: AssetView, save, stale_lbl: list, *, compact: bool) -> None:
+    """One-click 'still holds': refreshes last_touched without changing the score or note."""
+
+    def confirm():
+        previous = av.last_touched
+        av.last_touched = datetime.now(tz=timezone.utc)
+        save()
+        if stale_lbl[0] is not None:
+            _refresh_staleness(stale_lbl[0], av, compact=compact)
+
+        def undo():
+            av.last_touched = previous
+            save()
+            if stale_lbl[0] is not None:
+                _refresh_staleness(stale_lbl[0], av, compact=compact)
+
+        show_undo(f"'{av.name}' confirmed", undo)
+
+    ui.button(icon="check", on_click=confirm).props("flat dense round size=sm").tooltip(
+        "Still holds: mark as reviewed today without changing it")
 
 
 def _staleness_label(av: AssetView, compact: bool = False):

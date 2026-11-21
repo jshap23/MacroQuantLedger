@@ -85,6 +85,9 @@ class ViewPracticeMeta(BaseModel):
     discussion_attempts: int = 0
     defense_attempts: int = 0
     latest_diagnostic: list[str] = Field(default_factory=list)
+    # Self-rated recall from the My Views deck ("Nailed" | "Shaky" | "Blanked"); app-only.
+    recall_last: str = ""
+    recall_at: Optional[datetime] = None
 
 
 class TopicView(BaseModel):
@@ -105,6 +108,9 @@ class TopicView(BaseModel):
     tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now_utc)
     updated_at: datetime = Field(default_factory=_now_utc)
+    # App-only "Still holds" confirmation. Kept apart from updated_at, which is synced to
+    # Obsidian, so confirming a View never registers as a content change.
+    reviewed_at: Optional[datetime] = None
     practice: ViewPracticeMeta = Field(default_factory=ViewPracticeMeta)
 
 
@@ -119,6 +125,8 @@ class AppState(BaseModel):
     trades: list[Trade] = Field(default_factory=list)
     topic_views: list[TopicView] = Field(default_factory=list)
     topic_views_version: int = 0
+    # ISO dates (local) on which a My Views action was taken; feeds the weekly streak.
+    activity_days: list[str] = Field(default_factory=list)
 
 
 DEFAULT_MACRO_VIEWS = [

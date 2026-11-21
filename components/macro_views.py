@@ -4,6 +4,7 @@ from nicegui import ui
 from models.schema import AppState, MacroView
 from storage.persistence import save_state
 from components.status_bar import days_since, staleness_color
+from components.undo_toast import inject_undo_css, show_undo
 
 
 DIRECTION_COLORS = {
@@ -202,7 +203,7 @@ def _conviction_bars_html(conviction: str) -> str:
 
 # ── Card section builders ──────────────────────────────────────────────
 
-def _build_card_header(view: MacroView, index: int, open_drawer_fn):
+def _build_card_header(view: MacroView, index: int, open_drawer_fn, on_confirm):
     d = days_since(view.last_touched)
     s_label = "not set" if d is None else ("today" if d == 0 else f"{d}d ago")
     s_color = staleness_color(d)
@@ -210,6 +211,8 @@ def _build_card_header(view: MacroView, index: int, open_drawer_fn):
     ui.label(f"{index:02d}").classes("mv-card-num")
     ui.label(view.name).classes("mv-card-name")
     ui.label(s_label).classes("mv-card-staleness").style(f"color:{s_color};")
+    ui.button("Still holds", on_click=lambda _: on_confirm()).classes("mv-details-btn").tooltip(
+        "Mark this view as reviewed today without changing it")
     ui.button("Details", on_click=lambda _, v=view: open_drawer_fn(v)).classes("mv-details-btn")
 
 
@@ -294,7 +297,7 @@ def _render_card(view: MacroView, save, open_drawer_fn, index: int) -> dict:
     def refresh_header():
         header_el.clear()
         with header_el:
-            _build_card_header(view, index, open_drawer_fn)
+            _build_card_header(view, index, open_drawer_fn, _on_confirm)
 
     def refresh_thesis():
         thesis_el.clear()
@@ -337,6 +340,19 @@ def _render_card(view: MacroView, save, open_drawer_fn, index: int) -> dict:
         save()
         refresh_header()
         refresh_conviction()
+
+    def _on_confirm():
+        previous = view.last_touched
+        view.last_touched = datetime.now(tz=timezone.utc)
+        save()
+        refresh_header()
+
+        def undo():
+            view.last_touched = previous
+            save()
+            refresh_header()
+
+        show_undo(f"'{view.name}' confirmed", undo)
 
     refresh_header()
     refresh_thesis()
@@ -401,6 +417,7 @@ def _render_drawer(view: MacroView, save, dialog, refresh_header):
 
 def render_macro_views(state: AppState, save_indicator):
     _inject_css()
+    inject_undo_css()
     summary_controls = {}
     card_refreshers: dict = {}
 

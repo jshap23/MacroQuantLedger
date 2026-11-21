@@ -24,6 +24,8 @@ python setup_speech_runtime.py
 launch_macroQuantLedger.bat
 # Or directly from an activated conda shell:
 python launch.py
+# Open straight into My Views > Flip through (all | stale | shaky | core); the .bat forwards its arguments
+python launch.py --deck shaky
 # Development / manual run:
 python app.py
 
@@ -35,6 +37,9 @@ python validate_topic_view_sync.py
 
 # Validate interview practice persistence/evaluation logic (uses temp dirs only)
 python validate_interview_practice.py
+
+# Validate My Views levels, freshness, streak, and personal bests (pure in-memory, no files or network)
+python validate_view_levels.py
 ```
 
 There are **no automated test suites, linters, or CI pipelines**. Two standalone validation scripts must pass after changes to the code they cover: `validate_topic_view_sync.py` (TopicView/Obsidian sync) and `validate_interview_practice.py` (interview practice persistence, evaluation, and postmortems).
@@ -61,6 +66,8 @@ All component CSS must follow this pattern. Current IDs in use:
 - `mq-briefing-css` (components/briefing.py)
 - `mq-attribution-css` (components/attribution.py)
 - `mq-topic-views-css` (components/topic_views.py)
+- `mq-view-deck-css` (components/view_deck.py)
+- `mq-undo-css` (components/undo_toast.py)
 - `mq-interview-css` (components/interview_practice.py)
 
 ## Architecture
@@ -109,7 +116,7 @@ All component CSS must follow this pattern. Current IDs in use:
 | `services/talking_points.py` | Pure synthesis — `macro_prose()`, `fred_snippet()`, `asset_verbal()` |
 | `services/llm_polish.py` | OpenRouter chat — briefing generation, polish, document summaries (`summarize()`), and disk cache |
 | `services/attribution.py` | View-vs-returns engine — asset benchmark mapping (`ASSET_BENCH`), macro benchmark mapping (`MACRO_BENCH`), score timeline, hit-rate calculation |
-| `services/topic_views.py` | TopicView AI helpers — `challenge_view()`, `views_context()` (note-structuring LLM helper removed) |
+| `services/topic_views.py` | TopicView AI helpers — `challenge_view()`, `views_context()` (note-structuring LLM helper removed); pure deck helpers `split_point()` (claim-first point splitting) and `RECALL_RATINGS` |
 | `storage/topic_view_markdown.py` | TopicView Markdown parser/renderer for Obsidian sync |
 | `storage/topic_view_sync.py` | TopicView <-> Obsidian Views folder sync engine and `data/topic_view_sync.json` persistence |
 | `services/interview_llm.py` | Provider-neutral LLM client for interview practice |
@@ -122,7 +129,12 @@ All component CSS must follow this pattern. Current IDs in use:
 | `components/status_bar.py` | Summary staleness indicator ("X current / Y need review" + weekly review age) |
 | `components/macro_views.py` | 7 fixed macro view rows — side-drawer editor, conviction bars, direction badges |
 | `components/asset_views.py` | Asset Class Views tab — score grid + conviction tenure table |
-| `components/topic_views.py` | My Views tab — TopicView rolodex, editor, AI assists |
+| `components/topic_views.py` | My Views tab — TopicView rolodex, editor, AI assists; cards show level pips, a freshness stripe, and a one-click Still holds |
+| `components/view_deck.py` | My Views **Flip through** deck — a picker (all listed / Core / Shaky last time / by tag), then one View at a time in Recall (default) or Read mode with a saved self-rated recall, Still holds, Quick edit (saves immediately, new facts dated today), **Say it** (one Deliver rep graded inline, typed or voice), keyboard shortcuts, and an end-of-deck summary; also owns the shared level pips / freshness helpers |
+| `services/view_progress.py` | Pure My Views weekly streak (`weekly_streak()`, `activity_dates()`, `note_activity()`), personal bests (`is_personal_best()`, `band_index()`), and `?deck=` link selection (`deck_for_link()`) |
+| `components/undo_toast.py` | `show_undo()` — a small in-page Undo snackbar (one per client, 8 s) used by Still holds, recall ratings, and the Macro/Asset confirm buttons |
+| `services/session_cleanup.py` | `stale_active_sessions()` (pure) and `abandon_stale_sessions()` — marks unfinished practice sessions older than 7 days abandoned via the controller's own abandon path |
+| `services/view_levels.py` | Pure My Views levels (Blank → Sketch → Supported → Rehearsed → Battle-tested) and freshness (age vs priority cadence), derived at read time from View content and interview history; nothing stored |
 | `components/briefing_strip.py` | "Top of Mind" textarea (rendered at the top of the My Views page) |
 | `components/briefing.py` | Morning Briefing tab — LLM generation or template fallback |
 | `components/reconciliation.py` | Weekly reconciliation form + history log (capped at 52) + quant focus inputs |
@@ -137,6 +149,7 @@ All component CSS must follow this pattern. Current IDs in use:
 | `export/excel.py` | Multi-sheet Excel workbook — macro views, asset views, reconciliations |
 | `export/topics.py` | One-way TopicView Markdown export placeholder; not the bidirectional sync engine |
 | `validate_topic_view_sync.py` | Standalone validation for the TopicView ↔ Obsidian sync engine (temp dirs only, no network) |
+| `validate_view_levels.py` | Standalone validation for My Views levels, grader isolation, freshness, Still holds, deck point splitting, weekly streak, and personal bests (pure in-memory) |
 | `validate_interview_practice.py` | Standalone validation for interview practice persistence, per-turn evaluation/repair, provider-vs-output errors, controller-owned session end, and postmortems (temp dirs only, no network) |
 
 ### Header Visual Design (Current)
@@ -176,10 +189,11 @@ All component CSS must follow this pattern. Current IDs in use:
 - `counterargument`, `changes_my_mind`, `watch` (list of watch items)
 - `status`: `"Developing"` | `"Ready"` | `"Needs Refresh"`
 - `priority`: `"Core"` | `"Normal"` | `"Low Priority"`
-- `archived`, `related_view_ids`, `created_at`, `updated_at`, `practice` (`ViewPracticeMeta`)
+- `archived`, `related_view_ids`, `created_at`, `updated_at`, `reviewed_at` (app-only "Still holds" timestamp, never synced), `practice` (`ViewPracticeMeta`)
 
 **`AppState`** top-level fields:
 - `macro_views`, `macro_notes`, `asset_views`, `quant_focus`, `quant_focus_next`
+- `activity_days` (local ISO dates of My Views actions; capped at 400; feeds the weekly streak)
 - `reconciliations`, `briefing`, `trades`, `topic_views`, `topic_views_version`
 
 ### Key Design Decisions
@@ -196,6 +210,7 @@ All component CSS must follow this pattern. Current IDs in use:
 - **Fed doc bodies never change once published** — `fed_client.document_body()` caches them permanently to `data/fed_cache/<hash>.txt`; only the RSS listings re-fetch.
 - **Schema Migration** — `persistence.py` `_migrate()` handles old `state.json` gracefully, seeds `topic_views_version`, and migrates legacy asset directions to 1-5 scores.
 - **Interview History** — Practice sessions are persisted separately in `data/interview_history.json`. Sessions can be `active`, `completed`, or `abandoned`; exiting an in-progress session preserves any submitted answers but does not count it as completed or update My View practice metadata. If the file exists but cannot be read (bad JSON, a schema violation, or bad encoding), `load_database()` backs it up to `data/backups/interview_history_unreadable_<timestamp>.json` and raises `InterviewHistoryUnreadable` instead of returning an empty database, so no save can overwrite unreadable history; the Practice tab renders one error card naming the backup path, and the rest of the app keeps working. Re-reading an identical unreadable file reuses its existing backup rather than writing another.
+- **My Views levels, freshness, and deck** — Levels are derived at read time (`services/view_levels.py`), never stored. Content: Sketch = bottom line + two titled points; Supported = also a counterargument and two facts. Practice: Rehearsed = at least two scored reps with the latest at 5+ (Band 5–6); Battle-tested = also a Defend rep at 7+ (Band 7–8). The View's level is the higher of its content and practice levels, and practice needs only a Sketch, so reps are never discarded for missing optional facts. Reps are grouped by (rubric id, grader model) and never mixed across groups, so switching grader can neither remove an earned level nor combine graders; retries, abandoned, custom, and unanchored sessions do not count. Preset and input method are deliberately not in the group (fixed bands of one shared rubric, not a trend), unlike `comparability_key()`. Freshness is days since `max(updated_at, reviewed_at)` over the priority cadence (`VIEW_CADENCE_DAYS`); the card stripe fades teal → slate between 0.5× and 2× cadence. **Still holds** sets only `reviewed_at`, so it never touches `updated_at` and never queues an Obsidian sync change. **Flip through** keeps the user's own order by default (Stalest first and Shuffle are opt-in); it never ranks or nags. It opens in **Recall** mode: the card starts face down (title, level, point count), Space reveals it in place (so an open Say it result survives), and the user rates the recall Nailed / Shaky / Blanked (keys 1/2/3, auto-advance). The rating is a local self-assessment saved as `ViewPracticeMeta.recall_last` / `recall_at` (app-only, not synced, no LLM call); it is shown subtly ("Recall: Shaky") and never affects levels, which only graded reps can raise. **Read** mode shows everything with no rating. Points render claim-first (`split_point`: a leading **bold** phrase, else the first sentence of a long point), with the remainder and facts folded under Details, and Markdown is rendered rather than shown raw. The Still holds / rating / Quick edit / Say it controls sit in a sticky bar (the Quasar panel ancestors are let overflow only while a deck is open, via `:has(.vd-shell)`). Keys are ignored while a panel is open, except Esc, which closes it. Finishing a pass shows a one-line summary (confirmed, edited, reps, level-ups, recall counts) and **Run the Shaky ones again**; per-pass stats are in memory only. **Weekly streak**: consecutive Monday-start weeks with any activity, where activity is a completed practice rep (any preset) or a recorded My Views action (`state.activity_days`: a real edit, Still holds, or a recall rating). An empty current week does not break it (it counts back from last week), and it is shown only at two or more weeks, as a quiet suffix on the My Views progress line and in the deck summary; it is not on the Practice home. **New best**: a Say it rep whose rubric band is higher than every earlier completed rep for that View under the same rubric, grader model, and practice style (bands, never raw scores; needs at least one earlier rep); shown as `NEW BEST · Band x–y` on the card and counted in the deck summary. There are no badges. **Deep link**: `/?deck=all|stale|shaky|core` opens the deck once on page load (`stale` is all Views stalest first; `shaky` is Shaky/Blanked; `core` is Core priority); an unknown key or an empty filter shows the overview with an info notice, and a plain `/` is unchanged. `launch.py --deck [choice]` builds that URL (a bare `--deck` means `all`) and `launch_macroQuantLedger.bat` forwards its arguments. **Undo**: Still holds (deck, overview card, Macro, Assets) and recall ratings offer an 8-second Undo toast that restores the previous `reviewed_at` / `last_touched` / recall values; in the deck the `U` key triggers it and returns to the undone card. The toast must be shown before any refresh that deletes the clicked button. **Macro and Asset Still holds** only refresh `last_touched` (it drives the staleness labels and the status bar's "current / need review" counts, and appears as the Excel export's last-touched column); attribution and conviction tenure come from daily snapshots, so confirming never changes them. **Clean up unfinished sessions…** (··· menu) marks active sessions started more than 7 days ago as abandoned after a confirm dialog: answers are kept and nothing counts as completed. **Say it** is a one-question `view_deliver` session (`start_session` + `evaluate_answer`) and counts as a full rep (View counts, diagnostics, trends); the card shows the band, critique, and fix immediately and the whole-session summary is written in the background. A provider/output failure keeps the draft and reuses the same session on retry; closing or leaving the panel mid-rep abandons the unfinished session so it never lingers as an active session in Practice.
 - **My Models** — Quant Practice adds Explain / Defend / Compare / Deep Dive modes powered by read-only interview-facing model notes in an Obsidian folder; notes are hidden LLM context, never rewritten by the app, and nothing breaks when the folder is unavailable. See "Quant Model Notes (My Models)" below.
 - **Practice feedback contract** — Every turn, in every mode, requires `score`, `critique`, and `fix`; those fields are private, are never placed in the question text, and `critique`/`fix` are written in the second person. Ordinary turns request only those fields plus one next question. The final turn is ordinary too: it evaluates the last answer only and requests no postmortem. One repair per turn (at most two LLM calls): a malformed response, missing score, or empty critique triggers a single retry at 1.5× the first call's budget, whose repair message lists every problem at once. A valid score saves as `ok` (score + critique + fix) or `partial` (score with critique or fix missing) on `InterviewAnswer.evaluation_status`; when a repair ran, the higher-ranked evaluation wins (a tie prefers the repair) and the next question keeps the better of the first and repair responses. No valid score after the repair raises `InterviewOutputError` and saves nothing. Empty model content is an output problem (`InterviewOutputError`, starvation hint logged, never displayed) rather than a provider failure (`InterviewProviderError`); the submit card shows distinct messages for the two and keeps the draft. The controller owns session end (`done = final_turn`) and sends `questions_remaining`.
 - **End-of-interview synthesis** — Completion saves the final answer, sets `status="completed"`, and sets `postmortem = InterviewPostmortem(status="pending")`; the whole-interview review is a separate `synthesize_session()` call fed one record per answer plus app-computed `session_stats()` numbers stated as facts the model must not recompute (retries excluded everywhere; `partial` answers with scores count). Answer text is capped at 1,000 characters unless the session has three or fewer questions. One repair at 1.5× `SYNTHESIS_MAX_TOKENS` (900). Failures never raise: they record `status="missing"` plus `InterviewPostmortem.synthesis_error` (`"provider"` or `"output"`). An `ok` summary is never re-billed and a usable `partial` summary is never downgraded. `_record_view_counts()` bumps View counts once at completion; `_record_view_diagnostic()` writes the review's diagnostics only when the session is the newest completed session for that View. The results screen renders immediately with "Writing summary…", then a muted stats line, and — for `pending` (interrupted), `missing`, or `partial` — a **Retry summary** button inside the summary card; the refreshed session is applied only if the user is still on that session.
@@ -319,5 +334,5 @@ data/
 ### Documentation Notes
 
 - **`CLAUDE.md` is now stale.** It still describes a 6-tab layout, 15 asset views, a hardcoded Obsidian path, and `SPEC.md` as authoritative. Do not trust it for current structure.
-- **`check_syntax.py` checks 44 files** (40 before My Models / `storage/model_library.py` were added).
+- **`check_syntax.py` checks 50 files** (44 before the My Views deck and its helpers — `view_deck`, `undo_toast`, `view_levels`, `view_progress`, `session_cleanup`, and `validate_view_levels.py` — were added).
 - **Trust actual source code** over any markdown documentation.

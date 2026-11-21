@@ -12,6 +12,7 @@ Environment variables:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -29,6 +30,20 @@ LOG_FILE = ROOT / "data" / "logs" / "mqledger.log"
 PORT = int(os.environ.get("MQLEDGER_PORT", "8080"))
 HOST = os.environ.get("MQLEDGER_HOST", "127.0.0.1")
 URL = f"http://{HOST}:{PORT}"
+DECK_CHOICES = ("all", "stale", "shaky", "core")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Launch MacroQuant Ledger.")
+    parser.add_argument(
+        "--deck", nargs="?", const="all", choices=DECK_CHOICES, default=None,
+        help="open straight into My Views > Flip through (all, stale, shaky, or core)",
+    )
+    return parser.parse_args(argv)
+
+
+def build_url(deck: str | None = None) -> str:
+    return f"{URL}/?deck={deck}" if deck else URL
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -163,11 +178,11 @@ def _wait_for_server(timeout: float = 30.0) -> bool:
     return False
 
 
-def _open_browser() -> None:
+def _open_browser(url: str = URL) -> None:
     if sys.platform == "win32":
         try:
             subprocess.run(
-                ["cmd", "/c", "start", "", f"microsoft-edge:{URL}"],
+                ["cmd", "/c", "start", "", f"microsoft-edge:{url}"],
                 check=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
@@ -176,10 +191,11 @@ def _open_browser() -> None:
             pass
     import webbrowser
 
-    webbrowser.open(URL)
+    webbrowser.open(url)
 
 
 def main() -> int:
+    args = parse_args()
     _terminate_existing()
 
     print(f"Starting MacroQuant Ledger on {URL} ...")
@@ -191,7 +207,7 @@ def main() -> int:
         proc.terminate()
         return 1
 
-    _open_browser()
+    _open_browser(build_url(args.deck))
     print("Browser opened. MacroQuant Ledger is running.")
     return 0
 
